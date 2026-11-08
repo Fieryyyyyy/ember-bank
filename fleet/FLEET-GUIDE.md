@@ -113,6 +113,7 @@ depot <x> <y> <z>
 | `forget <id>` | Remove a turtle from the fleet (frees its lane) |
 | `list` | List turtles, lanes and states |
 | `resetstats` | Clear the ore totals |
+| `update miners` / `update <id>` | Send the newest miner code from GitHub to the turtles |
 
 ---
 
@@ -135,7 +136,7 @@ reboot
 ## Step 5: Using the control room
 
 ### Tabs
-- **Fleet**: every turtle with its state, a fuel bar, current job, progress with ETA, and inventory.
+- **Fleet**: a summary row at the top shows **how many turtles you have** and how many are working, idle, on hold, need help or offline. Below it is every turtle with its state, a fuel bar, current job, progress with ETA, and inventory.
   - Tap a turtle for details, including **what it last got stuck on**, plus buttons: **Pause/Resume, Recall, Refuel, Cancel job, New job**.
   - The bottom buttons are **Pause all / Resume all / Recall all / Refuel all / Cancel all / + New job**. **Cancel all** asks you to confirm first.
   - **Refuel** sends a turtle to the depot to fill up. If it was mining, it goes straight back to the same spot afterwards.
@@ -143,7 +144,19 @@ reboot
 - **Map**: a top-down live map with the depot (`D`), your marker (`+`), each turtle (numbered, coloured by state) and its job area.
 - **Ores**: every ore with its **best Y level** and how many the fleet has mined. Tap **Mine** to start a branch mine at that ore's best Y.
 - **Log**: ore finds with coordinates, jobs finished, alerts.
-- **Settings**: **screen text size**, fuel reserve, refuel amount, burn mined coal, lava refuelling, and the junk list (tap to remove).
+- **Settings**: **screen text size**, fuel reserve, refuel amount, burn mined coal, lava refuelling, **software updates**, and the junk list (tap to remove).
+
+### Updating the software
+Everything installs from GitHub (see the README). To update:
+- **All miners at once:** Settings → **Update all miners**. Every online turtle downloads the newest miner code, restarts and carries on where it was. Its saved job and position are kept.
+- **This control room:** Settings → **Update control room**. Turtles, jobs and settings are kept.
+- **Check for updates** shows the newest version on GitHub. Settings also lists which version each miner runs, and a turtle's detail screen shows its version.
+- **First time only:** turtles running code from before remote updating existed can't update themselves. On each one, run this once:
+  ```
+  wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua miner
+  ```
+  then `reboot`. After that, the button does it for you.
+- Console: `update miners` or `update <id>`.
 
 ### Text size and scrolling
 - **Settings → Screen text size**: `Auto`, or 0.5 (small) up to 3 (huge). It changes straight away.

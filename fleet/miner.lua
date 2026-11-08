@@ -8,6 +8,9 @@
 local CONTROL_ID = nil          -- control computer's ID (shown on its screen). nil = find it automatically
 local PROTOCOL   = "fleetmine"
 local STATE_FILE = "/miner.state"
+local VERSION    = "2.1"
+local UPDATE_URL = "https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/fleet/miner.lua"
+local PROGRAM    = (shell and shell.getRunningProgram()) or "startup.lua"
 
 -- facing: 0 = north (-z), 1 = east (+x), 2 = south (+z), 3 = west (-x)
 local DX = { [0] = 0, 1, 0, -1 }
@@ -86,6 +89,7 @@ local function sendStatus()
     fuel = turtle.getFuelLevel(), fuelLimit = turtle.getFuelLimit(),
     state = status, alert = alert, job = S.job, mode = S.mode, paused = S.paused,
     progress = progress(), inv = 16 - freeSlots(), stats = S.stats, found = f, stuck = S.lastStuck,
+    version = VERSION,
   })
 end
 
@@ -111,13 +115,18 @@ local function drawScreen()
   print(); print("Controlled from the control room.")
 end
 
+local updateWanted, rebootPending = nil, nil
+local function rebootIfPending()
+  if rebootPending then save(); os.reboot() end
+end
+
 local function handle(msg)
   if msg.type == "welcome" or msg.type == "cfg" then
     if type(msg.cfg) == "table" then cfg = msg.cfg end
     if msg.lane then S.lane = msg.lane end
     save()
   elseif msg.type == "job" then
-    if S.job and S.mode ~= "idle" then send({ type = "log", text = "Busy - new job refused" }) return end
+    if S.mode == "job" and S.job then send({ type = "log", text = (os.getComputerLabel() or "?") .. " is busy - new job refused" }) return end
     S.job, S.step, S.mode, S.returnTo, S.lastStuck = msg.job, 1, "job", nil, nil
     flags.recall, flags.cancel = false, false
     save()
@@ -132,8 +141,9 @@ local function handle(msg)
       if S.mode == "job" then flags.recall = true end
     elseif c == "cancel" then
       S.paused = false
+      flags.recall = false
       if S.mode == "job" then flags.cancel = true
-      else S.job, S.mode, S.step = nil, "idle", 1 end
+      else S.job, S.mode, S.step, S.returnTo = nil, "idle", 1, nil end
     elseif c == "refuel" then
       S.paused = false
       flags.refuel = true
@@ -141,10 +151,34 @@ local function handle(msg)
       os.setComputerLabel(msg.name)
     elseif c == "reboot" then
       os.reboot()
+    elseif c == "update" then
+      updateWanted = (type(msg.url) == "string" and msg.url) or UPDATE_URL
     end
     save()
     sendStatus()
   end
+end
+
+-- ---------- remote update (sent from the control room) ----------
+local function selfUpdate(url)
+  local function log(t) send({ type = "log", text = (os.getComputerLabel() or "?") .. ": " .. t }) end
+  if not http then log("update failed - HTTP is off on this server") return end
+  local res, err = http.get(url .. "?t=" .. os.epoch("utc"))
+  if not res then log("update failed - " .. tostring(err)) return end
+  local body = res.readAll(); res.close()
+  if not body:find("FLEET MINER", 1, true) or not _G.load(body) then log("update failed - bad download") return end
+  local newVer = body:match('local VERSION%s*=%s*"([^"]+)"') or "?"
+  -- keep this turtle's CONTROL_ID setting
+  local f = fs.open(PROGRAM, "r")
+  local old = f and f.readAll() or ""
+  if f then f.close() end
+  local keep = old:match("\n(local CONTROL_ID[^\n]*)")
+  if keep then body = body:gsub("\nlocal CONTROL_ID[^\n]*", function() return "\n" .. keep end, 1) end
+  local w = fs.open(PROGRAM .. ".new", "w"); w.write(body); w.close()
+  if fs.exists(PROGRAM) then fs.delete(PROGRAM) end
+  fs.move(PROGRAM .. ".new", PROGRAM)
+  log("updated v" .. VERSION .. " -> v" .. newVer .. ", restarting")
+  rebootPending = os.clock()
 end
 
 local function netLoop()
@@ -157,6 +191,13 @@ local function netLoop()
     elseif ev == "rednet_message" and c == PROTOCOL and type(b) == "table" and serverId and a == serverId then
       handle(b)
     end
+    if updateWanted then
+      local url = updateWanted
+      updateWanted = nil
+      selfUpdate(url)
+    end
+    -- restart on the next move; if the turtle is sitting waiting, restart anyway after 20s
+    if rebootPending and os.clock() - rebootPending > 20 then save(); os.reboot() end
   end
 end
 
@@ -304,6 +345,7 @@ local function isTurtle(name) return name ~= nil and name:find("^computercraft:t
 
 local function move(dir)
   local tries = 0
+  rebootIfPending()
   while true do
     abortCheck()
     if S.paused then
@@ -827,8 +869,14 @@ local function mainLoop()
       end
     else
       if not isParked() then goHomeAndPark() end
-      status = (S.mode == "recalled") and "Recalled (job on hold)" or "Idle"
-      while not (S.mode == "job" and S.job) and not flags.refuel do sleep(1) end
+      if S.mode == "recalled" and not S.job then S.mode = "idle"; save() end
+      while not (S.mode == "job" and S.job) and not flags.refuel do
+        -- keep the status in step with Cancel / Resume sent while parked
+        if S.mode == "recalled" and not S.job then S.mode = "idle"; save() end
+        status = (S.mode == "recalled") and "Recalled (job on hold)" or "Idle"
+        rebootIfPending()
+        sleep(1)
+      end
       if flags.refuel then
         flags.refuel = false
         send({ type = "log", text = (os.getComputerLabel() or "?") .. " going to refuel" })
@@ -848,7 +896,7 @@ local function brain()
     save()
     send({ type = "log", text = (os.getComputerLabel() or "?") .. " ERROR: " .. alert })
     -- wait for Resume / Recall / Cancel / Refuel from the control room
-    while S.paused and not flags.cancel and not flags.recall and not flags.refuel do sleep(1) end
+    while S.paused and not flags.cancel and not flags.recall and not flags.refuel do rebootIfPending(); sleep(1) end
     if flags.cancel then
       flags.cancel = false
       S.job, S.mode, S.step, S.returnTo = nil, "idle", 1, nil
@@ -866,7 +914,9 @@ end
 -- allows the test harness to load this file without running it
 if ... == "test" then
   return { S = S, cfg = cfg, genBranch = genBranch, genBox = genBox, runJob = runJob, goHomeAndPark = goHomeAndPark,
-           init = init, mainLoop = mainLoop, brain = brain, flags = flags, handle = handle, setCfg = function(c) cfg = c end }
+           init = init, mainLoop = mainLoop, brain = brain, flags = flags, handle = handle, selfUpdate = selfUpdate,
+           netStep = function() if updateWanted then local u = updateWanted; updateWanted = nil; selfUpdate(u) end end,
+           rebootPending = function() return rebootPending end, VERSION = VERSION, setCfg = function(c) cfg = c end }
 end
 
 parallel.waitForAny(brain, netLoop)

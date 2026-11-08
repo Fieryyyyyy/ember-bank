@@ -6,6 +6,10 @@
 -- =====================================================
 
 local PROTOCOL      = "fleetmine"
+local VERSION       = "2.1"
+local REPO          = "https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/"
+local MINER_URL     = REPO .. "fleet/miner.lua"
+local CONTROL_URL   = REPO .. "fleet/control.lua"
 local DB_FILE       = "/fleet.db"
 local OFFLINE_AFTER = 15            -- seconds without a report = offline
 
@@ -92,7 +96,38 @@ local function stateOf(t)
   if not online(t) then return "Offline" end
   return (t.st and t.st.state) or "?"
 end
-local function isIdle(t) return t and online(t) and t.st and t.st.mode == "idle" and t.st.state == "Idle" end
+local function parked(t)
+  local s = (t.st and t.st.state) or ""
+  return s == "Idle" or s:find("^Recalled") ~= nil
+end
+-- free for a new job: online, parked at the depot and not running a job (a held job may be replaced)
+local function canTakeJob(t) return t and online(t) and t.st and t.st.mode ~= "job" and parked(t) end
+-- free and with nothing on hold: picked automatically for new jobs
+local function isIdle(t) return canTakeJob(t) and not t.st.job end
+
+local function fleetCounts()
+  local c = { total = 0, working = 0, idle = 0, held = 0, problem = 0, offline = 0 }
+  for _, t in pairs(db.turtles) do
+    c.total = c.total + 1
+    local st = t.st or {}
+    if not online(t) then c.offline = c.offline + 1
+    elseif st.state == "ERROR" or st.alert then c.problem = c.problem + 1
+    elseif st.mode == "job" then c.working = c.working + 1
+    elseif st.job then c.held = c.held + 1
+    else c.idle = c.idle + 1 end
+  end
+  return c
+end
+
+-- ---------- software updates (from GitHub) ----------
+local function fetch(url)
+  if not http then return nil, "HTTP is turned off on this server" end
+  local res, err = http.get(url .. "?t=" .. os.epoch("utc"))
+  if not res then return nil, tostring(err) end
+  local body = res.readAll(); res.close()
+  return body
+end
+local function versionOf(body) return body and body:match('local VERSION%s*=%s*"([^"]+)"') end
 local function freeLane()
   local used = {}
   for _, t in pairs(db.turtles) do if t.lane then used[t.lane] = true end end
@@ -273,7 +308,7 @@ local function launch(f)
   if f.kind == "quarry" and f.topY < f.bottomY then return false, "Top Y must be above bottom Y" end
   local ids = {}
   if f.only then
-    if not isIdle(db.turtles[f.only]) then return false, "That turtle isn't idle" end
+    if not canTakeJob(db.turtles[f.only]) then return false, "That turtle is busy - wait until it's parked" end
     ids = { f.only }
   else
     local want = (f.kind == "tunnel") and 1 or f.turtles
@@ -663,6 +698,23 @@ local function fleetScreen()
       para(2, y + 1, "No turtles yet. Put a turtle in the dock and install miner.lua on it.", colors.lightGray)
       return
     end
+    local c = fleetCounts()
+    local chips = {
+      { c.total .. " turtle" .. (c.total == 1 and "" or "s"), colors.black, colors.orange },
+      { c.working .. " working", colors.black, colors.lime },
+      { c.idle .. " idle", colors.black, colors.lightGray },
+    }
+    if c.held > 0 then chips[#chips + 1] = { c.held .. " on hold", colors.black, colors.yellow } end
+    if c.problem > 0 then chips[#chips + 1] = { c.problem .. " need help", colors.white, colors.red } end
+    if c.offline > 0 then chips[#chips + 1] = { c.offline .. " offline", colors.white, colors.gray } end
+    local x = 2
+    for _, ch in ipairs(chips) do
+      local s = " " .. ch[1] .. " "
+      if x > 2 and x + #s - 1 > CW then x = 2; y = y + 1 end
+      put(x, y, s, ch[2], ch[3])
+      x = x + #s + 1
+    end
+    y = y + 2
     fleetList(y, ids)
   end
 end
@@ -701,6 +753,7 @@ local function detailScreen()
       y = kvBar(y, "Progress", st.progress, colors.lime, string.format("%d%% ETA %s", math.floor(st.progress * 100), fmtTime(eta(t))))
     end
     y = kv(y, "Mined", ((st.stats and st.stats.blocks) or 0) .. " blocks, " .. (t.jobsDone or 0) .. " jobs done")
+    y = kv(y, "Software", st.version and ("v" .. st.version) or "old - update by hand once", st.version and colors.white or colors.orange)
     if st.alert then y = para(2, y + 1, st.alert, colors.red) end
     if t.lastStuck then
       y = para(2, y + 1, "Last stuck: " .. t.lastStuck, colors.orange)
@@ -980,6 +1033,32 @@ local function settingsScreen()
     y = numRow(y, "Refuel up to (at the depot)", c, "refuelTarget", 500, 5000, 500, 100000)
     y = toggleRow(y, "Burn coal the turtles mine", c, "burnCoal")
     y = toggleRow(y, "Collect lava for fuel (needs a bucket)", c, "lavaRefuel")
+    y = y + 1
+    put(2, y, "Software", colors.orange); y = y + 1
+    local vers, order = {}, {}
+    for _, t in pairs(db.turtles) do
+      local v = (t.st and t.st.version) or "old"
+      if not vers[v] then vers[v] = 0; order[#order + 1] = v end
+      vers[v] = vers[v] + 1
+    end
+    table.sort(order)
+    local parts = {}
+    for _, v in ipairs(order) do parts[#parts + 1] = vers[v] .. " on " .. (v == "old" and "old code" or ("v" .. v)) end
+    y = kv(y, "Miners", #parts > 0 and table.concat(parts, ", ") or "none yet")
+    y = kv(y, "Latest", ui.latest and ("v" .. ui.latest) or "tap Check for updates", ui.latest and colors.lime or colors.gray)
+    y = kv(y, "This room", "v" .. VERSION .. ((ui.latestControl and ui.latestControl ~= VERSION) and ("  (v" .. ui.latestControl .. " out)") or ""))
+    if vers.old then
+      y = para(2, y, "Miners on old code can't update remotely yet. On each one, once: wget run " .. REPO .. "install.lua miner", colors.orange)
+    end
+    local b = { { "checkupd", "Check for updates", colors.gray }, { "updminers", "Update all miners", colors.green },
+                { "updcontrol", "Update control room", colors.blue } }
+    local per = (CW >= 66) and 3 or 1
+    local bw = math.floor((CW - 1 - (per - 1)) / per)
+    for i, it in ipairs(b) do
+      local col = (i - 1) % per
+      btn(it[1], 2 + col * (bw + 1), y, bw, it[2], it[3], colors.white)
+      if col == per - 1 or i == #b then y = y + 1 end
+    end
     y = para(2, y + 1, "Junk (thrown away while mining) - tap to remove. Add on PC: junk add <id>", colors.lightGray)
     local names = {}
     for name in pairs(c.junk) do names[#names + 1] = name end
@@ -1070,6 +1149,41 @@ local function onTouch(x, y)
     for id in pairs(db.turtles) do sendCmd(id, d) end
     toast("Sent '" .. d .. "' to all turtles", true)
   elseif h.id == "cancelall" then askCancelAll()
+  elseif h.id == "checkupd" then
+    local body, err = fetch(MINER_URL)
+    ui.latest = versionOf(body)
+    ui.latestControl = versionOf(fetch(CONTROL_URL))
+    if ui.latest then toast("Latest miner code is v" .. ui.latest, true) else toast("Couldn't check: " .. tostring(err), false) end
+  elseif h.id == "updminers" then
+    local n = 0
+    for _, t in pairs(db.turtles) do if online(t) then n = n + 1 end end
+    ui.confirm = {
+      text = "Update all " .. n .. " online miners to the newest code from GitHub? Each one restarts and carries on where it was.",
+      yesLabel = "Update all",
+      yes = function()
+        for id, t in pairs(db.turtles) do if online(t) then sendCmd(id, "update", { url = MINER_URL }) end end
+        addLog("Sent update to " .. n .. " miners", colors.lightBlue)
+        toast("Update sent to " .. n .. " miners", true)
+      end,
+    }
+  elseif h.id == "updcontrol" then
+    ui.confirm = {
+      text = "Download the newest control room program from GitHub and restart? Your turtles, jobs and settings are kept.",
+      yesLabel = "Update",
+      yes = function()
+        local body, err = fetch(CONTROL_URL)
+        if not body or not body:find("FLEET CONTROL", 1, true) or not load(body) then
+          toast("Update failed: " .. tostring(err or "bad download"), false) return
+        end
+        local prog = (shell and shell.getRunningProgram()) or "startup.lua"
+        local f = fs.open(prog .. ".new", "w"); f.write(body); f.close()
+        if fs.exists(prog) then fs.delete(prog) end
+        fs.move(prog .. ".new", prog)
+        addLog("Control room updated to v" .. (versionOf(body) or "?") .. " - restarting", colors.lime)
+        saveDb()
+        os.reboot()
+      end,
+    }
   elseif h.id == "tcmd" then
     sendCmd(ui.detail, d)
     toast("Sent '" .. d .. "' to " .. db.turtles[ui.detail].name, true)
@@ -1137,6 +1251,7 @@ local commands, help = {}, {
   { "forget <id>", "remove a turtle from the fleet" },
   { "list", "list turtles" },
   { "resetstats", "clear the ore totals" },
+  { "update miners | update <id>", "send the newest miner code from GitHub" },
 }
 function commands.help()
   for _, h in ipairs(help) do color(colors.yellow); print(h[1]); color(colors.lightGray); print("   " .. h[2]) end
@@ -1194,10 +1309,18 @@ function commands.list()
   end
 end
 function commands.resetstats() db.totals = {}; saveDb(); print("Ore totals cleared.") end
+function commands.update(target)
+  if target == "miners" or target == "all" then
+    for id in pairs(db.turtles) do sendCmd(id, "update", { url = MINER_URL }) end
+    print("Update sent to all miners.")
+  elseif tonumber(target) and db.turtles[tonumber(target)] then
+    sendCmd(tonumber(target), "update", { url = MINER_URL }); print("Update sent.")
+  else error("Usage: update miners | update <id>", 0) end
+end
 
 local function console()
   term.clear(); term.setCursorPos(1, 1)
-  color(colors.orange); print("=== FLEET CONTROL ===")
+  color(colors.orange); print("=== FLEET CONTROL v" .. VERSION .. " ===")
   color(colors.lightGray); print("Computer ID " .. os.getComputerID() .. " | type 'help' for commands")
   if not db.cfg.dock then color(colors.red); print("First: set the depot with  depot <x> <y> <z>") end
   color(colors.white)
