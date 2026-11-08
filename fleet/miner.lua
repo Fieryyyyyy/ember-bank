@@ -8,7 +8,7 @@
 local CONTROL_ID = nil          -- control computer's ID (shown on its screen). nil = find it automatically
 local PROTOCOL   = "fleetmine"
 local STATE_FILE = "/miner.state"
-local VERSION    = "2.1"
+local VERSION    = "2.2"
 local UPDATE_URL = "https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/fleet/miner.lua"
 local PROGRAM    = (shell and shell.getRunningProgram()) or "startup.lua"
 
@@ -493,6 +493,7 @@ end
 --   East of the dock = DOWN shaft (turtles leaving)
 --   Each turtle travels underground on its own lane (Y level) so they never meet head on,
 --   and parks under the drop-off chest at its lane's Y level.
+local SAFE_DEPTH = 16   -- turtles travel home at least this far below the depot
 local function laneY() return cfg.dock.y - 2 - S.lane end
 local function parkPos() return { x = cfg.dock.x, y = laneY(), z = cfg.dock.z } end
 local function isParked() return samePos(S.pos, parkPos()) end
@@ -503,7 +504,14 @@ local function goDock()
   status = "Returning"
   local inUpShaft = S.pos.x == D.x - 1 and S.pos.z == D.z and S.pos.y >= ly and S.pos.y <= D.y
   if not inUpShaft then
-    must(goY(ly)); must(goX(D.x - 1)); must(goZ(D.z))
+    if S.pos.y < ly then
+      -- come home deep underground and rise straight up under the depot,
+      -- so the surface between the job and the depot is never touched
+      must(goY(math.min(S.pos.y, D.y - SAFE_DEPTH)))
+      must(goX(D.x - 1)); must(goZ(D.z))
+    else
+      must(goY(ly)); must(goX(D.x - 1)); must(goZ(D.z))
+    end
   end
   carefully(function()
     must(goY(D.y))
@@ -594,7 +602,8 @@ end
 
 local function homeDistance()
   local D, ly = cfg.dock, laneY()
-  return math.abs(S.pos.y - ly) + math.abs(S.pos.x - (D.x - 1)) + math.abs(S.pos.z - D.z) + math.abs(D.y - ly) + 2
+  local ty = S.pos.y < ly and math.min(S.pos.y, D.y - SAFE_DEPTH) or ly
+  return math.abs(S.pos.y - ty) + math.abs(S.pos.x - (D.x - 1)) + math.abs(S.pos.z - D.z) + math.abs(D.y - ty) + 2
 end
 
 local function serviceTrip(reason)

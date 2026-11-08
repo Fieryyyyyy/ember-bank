@@ -77,7 +77,7 @@ SIDE VIEW (looking north)                 TOP VIEW
 **How traffic works:**
 - Each turtle gets a **lane**: its own Y level 3 to 12 blocks below the dock, where it parks.
 - **Going out:** it digs **straight down** the east shaft to the job's Y level, then tunnels across in X and Z to the start. (A job above the lane goes along the lane first, then up.)
-- **Coming home:** it climbs to its lane, crosses at that depth so turtles never meet head-on, then queues in the west shaft to take turns at the dock.
+- **Coming home:** it stays deep underground: at its mining depth, or at least 16 blocks below the dock if the job was shallower. It tunnels across to the spot directly **under** the west shaft, then climbs straight up and takes its turn at the dock. The land's surface between the job and the depot is never touched.
 - If one turtle is in another's way, it waits for it to move rather than digging it.
 
 ---
