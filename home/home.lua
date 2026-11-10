@@ -6,7 +6,7 @@
 --    wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua home
 -- =====================================================
 
-local VERSION  = "1.3"
+local VERSION  = "1.4"
 local HOME_URL = "https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/home/home.lua"
 local DB_FILE  = "home.db"
 
@@ -44,7 +44,7 @@ local DISCS = {
 
 -- ---------- saved settings ----------
 local db = { cfg = {}, groups = {}, chests = {}, nextGroup = 1, queue = {} }
-local DEFAULTS = { uiScale = 0, musicChests = {}, drive = nil, shuffle = false, rep = "all", lens = {}, titles = {}, scanEvery = 10 }
+local DEFAULTS = { uiScale = 0, musicChests = {}, drive = nil, shuffle = false, rep = "all", lens = {}, slotTitles = {}, scanEvery = 10 }
 
 local function loadDb()
   if fs.exists(DB_FILE) then
@@ -292,35 +292,33 @@ local lib = { list = {}, byKey = {}, total = 0, chest = nil }
 local player = { qi = 0, playing = false, paused = false, started = 0, cur = nil }
 
 local function isDisc(name) return name:find("music_disc", 1, true) and not name:find("fragment", 1, true) end
--- Modpacks (like Cobbleverse) reuse vanilla disc items with a different song inside, so a disc is
--- identified by its item id plus the hash of its extra data ("nbt").
-local function keyOf(it) return it.nbt and (it.name .. "@" .. it.nbt) or it.name end
-local function itemOf(key) return (key:match("^([^@]+)")) end
 
-local function discInfo(key)
-  local name = itemOf(key)
-  local ns, rest = name:match("^([^:]+):(.+)$")
-  ns, rest = ns or "minecraft", rest or name
-  local short = rest:match("^music_disc_(.+)$") or rest
-  local known = db.cfg.titles[key]          -- "Artist - Title", read from the disk drive
-  local v = ns == "minecraft" and DISCS[short]
-  local custom = key:find("@", 1, true) ~= nil
-  local d = { key = key, item = name }
-  if v and ((not known and not custom) or known == v[2] .. " - " .. v[1]) then
+-- vanilla songs by the name the drive reports for them, e.g. "C418 - cat"
+local VANILLA = {}
+for _, v in pairs(DISCS) do VANILLA[v[2] .. " - " .. v[1]] = v end
+VANILLA["Samuel \197berg - 5"] = DISCS["5"]
+
+-- A song is known by the name the disk drive reports for it ("Yellow - Bike Theme").
+-- Modpacks (like Cobbleverse) put different songs inside the same vanilla disc item, so the
+-- item id says nothing: each disc's name is read from the drive once and remembered by its
+-- chest slot. Discs always go back into the slot they came from.
+local function discInfo(key, item)
+  local d = { key = key, item = item }
+  if key:sub(1, 1) == "?" then
+    d.unknown = true
+    d.title, d.artist, d.len, d.col = "Reading name...", "new disc", 180, P.line
+    return d
+  end
+  local v = VANILLA[key]
+  if v then
     d.title, d.artist, d.len, d.col, d.vanilla = v[1], v[2], db.cfg.lens[key] or v[3], v[4], true
     return d
   end
+  local a, t = key:match("^(.-) %- (.+)$")
+  if a then d.artist, d.title = a, t else d.title, d.artist = key, "Unknown artist" end
   local hsh = 0
   for i = 1, #key do hsh = (hsh * 31 + key:byte(i)) % 997 end
   d.col = ART_COLS[hsh % #ART_COLS + 1]
-  d.title, d.artist = pretty(short), ns ~= "minecraft" and pretty(ns) or "Unknown artist"
-  if known then
-    local a, t = known:match("^(.-) %- (.+)$")
-    if a then d.artist, d.title = a, t else d.title = known end
-  else
-    d.unknown = true
-    if custom then d.title, d.artist = "New disc", "reading its name..." end
-  end
   d.len = db.cfg.lens[key] or 180
   d.guessLen = not db.cfg.lens[key]
   return d
@@ -341,6 +339,9 @@ local function musicChests()
   for _, n in ipairs(dev.invs) do if isMusic(n) then t[#t + 1] = n end end
   return t
 end
+local explainLoadError
+local function locOf(chest, slot) return chest .. "#" .. slot end
+local function splitLoc(loc) local c, s = loc:match("^(.*)#(%d+)$") return c, tonumber(s) end
 
 -- a drive touching the computer is called "left", "right"...; chests on the cable can't reach it,
 -- so a drive on the wired network always wins
@@ -370,33 +371,42 @@ local function scanLibrary()
   lib.chest = lib.chests[1]
   lib.perChest = {}
   local seen, list = {}, {}
-  local function add(it, inDrive)
-    local k = keyOf(it)
-    if seen[k] then seen[k].count = seen[k].count + it.count return end
-    local d = discInfo(k); d.count = it.count; d.inDrive = inDrive
-    local old = lib.byKey[k]
-    if old then d.bad, d.tried = old.bad, old.tried end
-    seen[k] = d; list[#list + 1] = d
+  local function add(key, item, loc, count)
+    local d = seen[key]
+    if not d then
+      d = discInfo(key, item); d.count = 0; d.locs = {}
+      local old = lib.byKey[key]
+      if old then d.bad, d.tried = old.bad, old.tried end
+      seen[key] = d; list[#list + 1] = d
+    end
+    d.count = d.count + count
+    if loc then d.locs[#d.locs + 1] = loc end
+    return d
   end
   for _, chest in ipairs(lib.chests) do
     local ok, items = pcall(peripheral.wrap(chest).list)
     local n = 0
     if ok and type(items) == "table" then
-      for _, it in pairs(items) do
-        if isDisc(it.name) then n = n + it.count; add(it, false) end
+      for slot, it in pairs(items) do
+        if isDisc(it.name) then
+          n = n + it.count
+          local loc = locOf(chest, slot)
+          local st = db.cfg.slotTitles[loc]
+          if st and st.name == it.name and st.nbt == it.nbt then add(st.title, it.name, loc, it.count)
+          else add("?" .. loc, it.name, loc, it.count) end
+        end
       end
     end
     lib.perChest[chest] = n
   end
-  -- the disc that's in the drive right now still belongs to the library
-  local dn = drive()
-  if dn then
-    local okL, inDrive = pcall(peripheral.wrap(dn).list)
-    if okL and type(inDrive) == "table" then
-      for _, it in pairs(inDrive) do if isDisc(it.name) and not seen[keyOf(it)] then add(it, true) end end
-    end
+  -- the disc in the drive right now still belongs to the library
+  if player.cur and not seen[player.cur] and player.inDrive then
+    add(player.cur, player.item, nil, 1).inDrive = true
   end
-  table.sort(list, function(a, b) return a.title:lower() < b.title:lower() end)
+  table.sort(list, function(a, b)
+    if (a.unknown == true) ~= (b.unknown == true) then return not a.unknown end
+    return a.title:lower() < b.title:lower()
+  end)
   lib.list, lib.byKey, lib.total = list, seen, 0
   for _, d in ipairs(list) do lib.total = lib.total + d.len end
 end
@@ -419,51 +429,57 @@ local function stopSound()
   local _, drv = drive()
   if drv then pcall(drv.stopAudio) end
 end
--- put whatever is in the drive back in a music chest (the one it came from first)
+-- put whatever is in the drive back: into the exact slot it came from if possible
 local function returnDiscRaw()
   local dn, drv = drive()
   if not drv then return true end
   pcall(drv.stopAudio)
   local okP, present = pcall(drv.isDiskPresent)
-  if okP and not present then return true end
-  local order = {}
-  if player.from and isMusic(player.from) then order[1] = player.from end
-  for _, n in ipairs(musicChests()) do if n ~= player.from then order[#order + 1] = n end end
-  for _, n in ipairs(order) do
+  if okP and not present then player.inDrive = false return true end
+  if player.from and player.fromSlot and isMusic(player.from) and peripheral.isPresent(player.from) then
+    local ok, moved = pcall(peripheral.wrap(player.from).pullItems, dn, 1, 1, player.fromSlot)
+    if ok and moved and moved > 0 then player.inDrive = false return true end
+  end
+  for _, n in ipairs(musicChests()) do
     if peripheral.isPresent(n) then
       local ok, moved = pcall(peripheral.wrap(n).pullItems, dn, 1)
-      if ok and moved and moved > 0 then return true end
+      if ok and moved and moved > 0 then player.inDrive = false return true end   -- new slot: its name is read again later
     end
   end
   return false
 end
 local function returnDisc() return locked(returnDiscRaw) end
-local function current() return player.cur and (lib.byKey[player.cur] or discInfo(player.cur)) end
+local function current() return player.cur and (lib.byKey[player.cur] or discInfo(player.cur, player.item)) end
 local function elapsed() return player.playing and (os.clock() - player.started) or 0 end
 
--- find a disc in the music chests: returns chest name, slot
-local function findDisc(key)
-  for _, n in ipairs(musicChests()) do
-    local ok, items = pcall(peripheral.wrap(n).list)
-    if ok and type(items) == "table" then
-      for s, it in pairs(items) do if keyOf(it) == key then return n, s end end
-    end
-  end
+-- move the disc at loc into the drive; returns its item or nil, error
+local function loadDisc(loc)
+  local dn = drive()
+  local chest, slot = splitLoc(loc)
+  if not chest or not isMusic(chest) or not peripheral.isPresent(chest) then return nil, "gone" end
+  local ok, items = pcall(peripheral.wrap(chest).list)
+  local it = ok and type(items) == "table" and items[slot]
+  if not it or not isDisc(it.name) then return nil, "gone" end
+  local okM, moved = pcall(peripheral.wrap(chest).pushItems, dn, slot, 1)
+  if not okM or not moved or moved < 1 then return nil, okM and "blocked" or tostring(moved), chest end
+  player.from, player.fromSlot, player.inDrive, player.item = chest, slot, true, it.name
+  return it
 end
 
--- remember the song name the drive reports for this disc
-local function learnTitle(d, drv)
+function explainLoadError(err, dn, chest)
+  if isSide(dn) then toast("Put a wired modem on the disk drive and cable it up - it can't just touch the computer", P.red)
+  elseif isSide(chest) then toast("Put a wired modem on the music chest and cable it up - it can't just touch the computer", P.red)
+  else toast("Couldn't put the disc in the drive" .. (err ~= "blocked" and (": " .. tostring(err)) or ""), P.red) end
+  ui.toastUntil = os.clock() + 10
+end
+
+-- read the song name of the disc in the drive and remember it for its slot
+local function readName(loc, it, drv)
   local okT, title = pcall(drv.getAudioTitle)
   if okT and type(title) == "string" and title ~= "" then
-    if db.cfg.titles[d.key] ~= title then
-      db.cfg.titles[d.key] = title
-      local nd = discInfo(d.key)
-      d.title, d.artist, d.len, d.col, d.unknown, d.guessLen = nd.title, nd.artist, nd.len, nd.col, nil, nd.guessLen
-      return true
-    end
-    d.unknown = nil
+    db.cfg.slotTitles[loc] = { name = it.name, nbt = it.nbt, title = title }
+    return title
   end
-  return false
 end
 
 local function startDiscRaw(d)
@@ -471,26 +487,39 @@ local function startDiscRaw(d)
   if not drv then toast("No disk drive connected", P.red) return false end
   if #musicChests() == 0 then toast("No music chest connected", P.red) return false end
   if not returnDiscRaw() then toast("The music chests are full - can't put the disc back", P.red) return false end
-  local from, slot = findDisc(d.key)
-  if not slot then toast(d.title .. " isn't in a music chest", P.red) return false end
-  local okM, moved = pcall(peripheral.wrap(from).pushItems, dn, slot, 1)
-  if not okM or not moved or moved < 1 then
-    if isSide(dn) then
-      toast("Put a wired modem on the disk drive and cable it up - it can't just touch the computer", P.red)
-    elseif isSide(from) then
-      toast("Put a wired modem on the music chest and cable it up - it can't just touch the computer", P.red)
-    else
-      toast("Couldn't put the disc in the drive" .. (okM and "" or (": " .. tostring(moved))), P.red)
-    end
-    ui.toastUntil = os.clock() + 10
+  local it, err, chest, loc
+  for _, l in ipairs(d.locs or {}) do
+    it, err, chest = loadDisc(l)
+    if it then loc = l break end
+    if err ~= "gone" then break end
+  end
+  if not it then
+    if err == "gone" or not err then toast(d.title .. " isn't in a music chest any more", P.red)
+    else explainLoadError(err, dn, chest) end
     return false
   end
-  player.from = from
   local okA, has = pcall(drv.hasAudio)
   if okA and not has then d.bad = true; toast("Can't play " .. d.title, P.red); returnDiscRaw() return false end
-  if learnTitle(d, drv) then saveDb() end
+  -- the drive tells us what this disc really is (a disc may have been moved around in the chest)
+  local key = d.key
+  local title = readName(loc, it, drv)
+  if title and title ~= key then
+    if not d.unknown then
+      -- this slot held a different song than we thought: the chest was rearranged, so
+      -- re-read every look-alike disc in it
+      local chest0 = splitLoc(loc)
+      for l2, st in pairs(db.cfg.slotTitles) do
+        if l2 ~= loc and st.name == it.name and splitLoc(l2) == chest0 then db.cfg.slotTitles[l2] = nil end
+      end
+    end
+    key = title
+    for i, k in ipairs(db.queue) do if k == d.key then db.queue[i] = key end end
+    if not lib.byKey[key] then local nd = discInfo(key, it.name); nd.locs = { loc }; nd.count = 1; lib.byKey[key] = nd end
+  end
+  saveDb()
   drv.playAudio()
-  player.cur, player.playing, player.paused, player.started = d.key, true, false, os.clock()
+  player.cur, player.playing, player.paused, player.started = key, true, false, os.clock()
+  if key ~= d.key then scanLibrary() end
   return true
 end
 local function startDisc(d) return locked(startDiscRaw, d) end
@@ -500,20 +529,22 @@ local function learnNames()
   local changed = false
   for _, d in ipairs(lib.list) do
     if player.playing or player.paused then break end
-    if d.unknown and not d.tried and not d.inDrive then
-      d.tried = true
+    if d.unknown and d.locs[1] and (not d.tried or os.clock() - d.tried > 60) then
+      d.tried = os.clock()
       locked(function()
-        local dn, drv = drive()
+        local _, drv = drive()
         if not drv or player.playing or player.paused then return end
         local okP, present = pcall(drv.isDiskPresent)
         if not okP or present then return end
-        local from, slot = findDisc(d.key)
-        if not slot then return end
-        local okM, moved = pcall(peripheral.wrap(from).pushItems, dn, slot, 1)
-        if not okM or not moved or moved < 1 then return end
-        if learnTitle(d, drv) then changed = true end
-        local okB, back = pcall(peripheral.wrap(from).pullItems, dn, 1)
-        if not okB or not back or back < 1 then player.from = from; returnDiscRaw() end
+        local loc = d.locs[1]
+        local it, err, chest = loadDisc(loc)
+        if not it then
+          if err ~= "gone" then explainLoadError(err, drive(), chest) end
+          return
+        end
+        if readName(loc, it, drv) then changed = true end
+        returnDiscRaw()
+        player.from, player.fromSlot, player.item = nil, nil, nil
       end)
     end
   end
@@ -1694,6 +1725,7 @@ local function main()
   loadDb()
   scanDevices()
   setupScreen()
+  returnDisc()          -- a disc left in the drive from before goes back to a chest
   scanLibrary()
   termStatus()
   parallel.waitForAny(uiLoop, scanLoop)
@@ -1707,7 +1739,7 @@ end
 if HOME_TEST then
   return { main = main, redraw = redraw, onTouch = onTouch, ui = ui, db = db, lib = lib, player = player, farm = farm,
            dev = dev, scanDevices = scanDevices, setupScreen = setupScreen, scanLibrary = scanLibrary, scanFarm = scanFarm,
-           musicTick = musicTick, learnNames = learnNames, nextTrack = nextTrack, playDisc = playDisc, shufflePlay = shufflePlay, togglePlay = togglePlay,
+           musicTick = musicTick, learnNames = learnNames, returnDisc = returnDisc, nextTrack = nextTrack, playDisc = playDisc, shufflePlay = shufflePlay, togglePlay = togglePlay,
            hits = function() return hits end, fb = function() return fb end, size = function() return W, H end, loadDb = loadDb }
 end
 main()
