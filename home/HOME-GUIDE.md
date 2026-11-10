@@ -49,9 +49,12 @@ Leave the drive alone while music is on. A disc you put in by hand gets moved in
     - **The Farm → Manage:** tap **Music** on the chest. Music chests are listed at the top, with **Not music** to remove one.
   - A disc goes back into the chest it came from. If that chest is full, it goes into another music chest.
 - **Adding music:** put a disc in the chest and it shows up within 10 seconds. Take it out and it's gone from the list.
-- **Song names come from the discs themselves**, so Cobbleverse's Poké Discs show their real songs, such as "Yellow - Bike Theme".
-  - When nothing is playing, the computer slips each new disc into the drive for a moment, reads its song name and puts it back **in the same slot**. New discs show "Reading name..." for a few seconds until then.
-  - Names are remembered per chest slot, because many Poké Discs are the same item with different songs inside. Moving discs around in the chest is fine: if a disc turns out to be a different song when it plays, the program fixes its name and re-reads the look-alikes in that chest.
+- **Song names:** the computer reads each disc's name from the drive, the way the server sees it.
+  - **Cobbleverse's Poké Discs** are vanilla discs with new names and music that exist only in your game's resource pack. The computer sees "C418 - wait", never "Yellow - Bike Theme".
+  - **Name them once yourself:** play a disc, tap **Rename** on **Now playing**, and type the song your game shows (like `Yellow - Bike Theme`).
+    - You can type on the on-screen keyboard or on the computer's own keyboard. Enter saves.
+    - Every copy of that disc gets the name.
+  - **Settings → Disc names** lists every kind of disc so you can name them all in one go. **Reset** goes back to the vanilla name.
   - If a disc can't play, its name goes red and it gets skipped.
 
 **Two things the game can't do:**

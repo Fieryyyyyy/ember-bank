@@ -6,7 +6,7 @@
 --    wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua home
 -- =====================================================
 
-local VERSION  = "1.5"
+local VERSION  = "1.6"
 local HOME_URL = "https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/home/home.lua"
 local DB_FILE  = "home.db"
 
@@ -44,7 +44,7 @@ local DISCS = {
 
 -- ---------- saved settings ----------
 local db = { cfg = {}, groups = {}, chests = {}, nextGroup = 1, queue = {} }
-local DEFAULTS = { uiScale = 0, musicChests = {}, drive = nil, shuffle = false, rep = "all", lens = {}, slotTitles = {}, scanEvery = 10 }
+local DEFAULTS = { uiScale = 0, musicChests = {}, drive = nil, shuffle = false, rep = "all", lens = {}, slotTitles = {}, renames = {}, scanEvery = 10 }
 
 local function loadDb()
   if fs.exists(DB_FILE) then
@@ -311,6 +311,19 @@ local function discInfo(key, item)
     return d
   end
   local v = VANILLA[key]
+  -- a name you gave this disc (resource packs rename discs only on your screen; the computer can't see that)
+  local rn = item and db.cfg.renames[item]
+  if rn then
+    local a, t = rn:match("^(.-) %- (.+)$")
+    if a then d.artist, d.title = a, t else d.title, d.artist = rn, v and ("was " .. v[1]) or "" end
+    local hsh = 0
+    for i = 1, #rn do hsh = (hsh * 31 + rn:byte(i)) % 997 end
+    d.col = ART_COLS[hsh % #ART_COLS + 1]
+    d.len = db.cfg.lens[key] or (v and v[3]) or 180
+    d.guessLen = not db.cfg.lens[key]
+    d.renamed = true
+    return d
+  end
   if v then
     d.title, d.artist, d.len, d.col, d.vanilla = v[1], v[2], db.cfg.lens[key] or v[3], v[4], true
     return d
@@ -782,6 +795,14 @@ function go(app) ui.app = app; ui.menu = nil end
 
 local function openKeyboard(title, value, onDone) ui.kb = { title = title, value = value or "", onDone = onDone, lower = false } end
 local function openMenu(title, options) ui.menu = { title = title, options = options } end
+-- name a disc yourself; every copy of the same disc item gets the name
+local function renameDisc(d)
+  if not d or not d.item then return end
+  openKeyboard("Song name, like: Yellow - Bike Theme", db.cfg.renames[d.item] or "", function(v)
+    db.cfg.renames[d.item] = v ~= "" and v or nil
+    saveDb(); scanLibrary()
+  end)
+end
 local function askConfirm(msg, yes) ui.confirm = { text = msg, yes = yes } end
 
 local function scrollbar(x, y, h)
@@ -1102,7 +1123,9 @@ local function musicNow(x, y1, w, y2)
   ty = ty + 2
   if d then
     text(tx, ty, fit(d.title, tw), P.text, P.bg); ty = ty + 1
-    text(tx, ty, fit(d.artist, tw), P.sub, P.bg); ty = ty + 2
+    text(tx, ty, fit(d.artist, tw - 9), P.sub, P.bg)
+    if d.item then button(tx + tw - 8, ty - 1, "Rename", P.card, P.text, function() renameDisc(d) end, 8, 2) end
+    ty = ty + 2
   else
     text(tx, ty, fit("No discs in the music chest", tw), P.text, P.bg); ty = ty + 3
   end
@@ -1547,6 +1570,21 @@ S.settings = function(y1, y2)
       button(x + 24, y, "+10s", P.line, P.text, function() setLen(10) end, 6)
     end)
   end
+  -- every kind of disc in the chests, to name them all in one go
+  heading("DISC NAMES  (tap Rename and type the song your game shows)")
+  local seenItem = {}
+  for _, d in ipairs(lib.list) do
+    if d.item and not seenItem[d.item] then
+      seenItem[d.item] = true
+      local short = d.item:match("music_disc_(.+)$") or d.item
+      row(d.artist .. " - " .. d.title .. "   (" .. short .. ")", function(x, y)
+        button(x, y, "Rename", P.line, P.text, function() renameDisc(d) end, 10)
+        if db.cfg.renames[d.item] then
+          button(x + 12, y, "Reset", P.line, P.text, function() db.cfg.renames[d.item] = nil; saveDb(); scanLibrary() end, 9)
+        end
+      end)
+    end
+  end
   heading("DEVICES")
   row(#dev.invs .. " chests  \7  " .. #dev.drives .. " drive" .. (#dev.drives == 1 and "" or "s") .. "  \7  " .. (dev.monitor or "no monitor"), function(x, y)
     button(x, y, "Rescan", P.line, P.text, function() scanDevices(); setupScreen(); scanLibrary(); toast("Devices rescanned", P.accent) end, 10)
@@ -1626,21 +1664,24 @@ local function drawKeyboard()
   local h = 4 + 5 * (kh + gap) + 2
   local x, y, bw = box(w, h, k.title)
   fill(x + 2, y + 2, bw - 4, 1, P.bg)
-  text(x + 3, y + 2, fit(k.value, bw - 7) .. "_", P.text, P.bg)
+  local shown = k.value
+  if #shown > bw - 7 then shown = shown:sub(-(bw - 7)) end
+  text(x + 3, y + 2, shown .. "_", P.text, P.bg)
+  if bw >= 50 then text(x + bw - 30, y + 1, "(or type on the computer)", P.sub, P.card) end
   local yy = y + 4
   for _, r in ipairs(KB_ROWS) do
     for i = 1, #r do
       local ch = r:sub(i, i)
       if k.lower then ch = ch:lower() end
       local kx = x + 2 + (i - 1) * kw
-      button(kx, yy, ch, P.line, P.text, function() if #k.value < 24 then k.value = k.value .. ch end end, kw - 1, kh)
+      button(kx, yy, ch, P.line, P.text, function() if #k.value < 40 then k.value = k.value .. ch end end, kw - 1, kh)
     end
     yy = yy + kh + gap
   end
   local bx = x + 2
   local unit = kw
   bx = button(bx, yy, k.lower and "ABC" or "abc", P.panel, P.text, function() k.lower = not k.lower end, unit * 2 - 1, kh) + 1
-  bx = button(bx, yy, "Space", P.panel, P.text, function() if #k.value < 24 then k.value = k.value .. " " end end, unit * 3 - 1, kh) + 1
+  bx = button(bx, yy, "Space", P.panel, P.text, function() if #k.value < 40 then k.value = k.value .. " " end end, unit * 3 - 1, kh) + 1
   bx = button(bx, yy, "Del", P.panel, P.text, function() k.value = k.value:sub(1, -2) end, unit * 2 - 1, kh) + 1
   bx = button(bx, yy, "Cancel", P.red, P.text, function() ui.kb = nil end, unit * 2 - 1, kh) + 1
   button(bx, yy, "OK", P.accent, P.bg, function() ui.kb = nil; k.onDone(k.value) end, unit - 1, kh)
@@ -1715,6 +1756,14 @@ local function uiLoop()
     elseif e == "monitor_resize" then setupScreen(); redraw()
     elseif e == "peripheral" or e == "peripheral_detach" then
       scanDevices(); setupScreen(); termStatus(); redraw()
+    elseif e == "char" and ui.kb then
+      -- typing on the computer's own keyboard while the on-screen keyboard is open
+      if #ui.kb.value < 40 then ui.kb.value = ui.kb.value .. ev[2] end
+      redraw()
+    elseif e == "key" and ui.kb then
+      if ev[2] == keys.backspace then ui.kb.value = ui.kb.value:sub(1, -2)
+      elseif ev[2] == keys.enter then local k = ui.kb; ui.kb = nil; k.onDone(k.value) end
+      redraw()
     elseif e == "char" then
       local c = ev[2]:lower()
       if c == "q" then return
