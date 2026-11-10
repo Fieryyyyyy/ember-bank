@@ -6,7 +6,7 @@
 --    wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua home
 -- =====================================================
 
-local VERSION  = "1.4"
+local VERSION  = "1.5"
 local HOME_URL = "https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/home/home.lua"
 local DB_FILE  = "home.db"
 
@@ -52,6 +52,7 @@ local function loadDb()
     if type(t) == "table" then for k, v in pairs(t) do db[k] = v end end
   end
   for k, v in pairs(DEFAULTS) do if db.cfg[k] == nil then db.cfg[k] = v end end
+  if (db.cfg.namesVersion or 0) < 2 then db.cfg.slotTitles = {}; db.cfg.namesVersion = 2 end   -- re-read disc names once
   if db.cfg.musicChest then db.cfg.musicChests[db.cfg.musicChest] = true; db.cfg.musicChest = nil; db.cfg.musicPicked = true end   -- older versions had one
   db.groups = db.groups or {}; db.chests = db.chests or {}; db.queue = db.queue or {}
 end
@@ -460,6 +461,9 @@ local function loadDisc(loc)
   local ok, items = pcall(peripheral.wrap(chest).list)
   local it = ok and type(items) == "table" and items[slot]
   if not it or not isDisc(it.name) then return nil, "gone" end
+  -- the tooltip text too: some modpacks put the song name there instead of in the disc's song
+  local okD, det = pcall(peripheral.wrap(chest).getItemDetail, slot)
+  if okD and type(det) == "table" then it.lore, it.display = det.lore, det.displayName end
   local okM, moved = pcall(peripheral.wrap(chest).pushItems, dn, slot, 1)
   if not okM or not moved or moved < 1 then return nil, okM and "blocked" or tostring(moved), chest end
   player.from, player.fromSlot, player.inDrive, player.item = chest, slot, true, it.name
@@ -474,9 +478,18 @@ function explainLoadError(err, dn, chest)
 end
 
 -- read the song name of the disc in the drive and remember it for its slot
+local function cleanText(t)
+  if type(t) ~= "string" then return nil end
+  t = t:gsub("\194?\167.", ""):gsub("^%s+", ""):gsub("%s+$", "")   -- drop colour codes
+  return t ~= "" and t or nil
+end
 local function readName(loc, it, drv)
   local okT, title = pcall(drv.getAudioTitle)
-  if okT and type(title) == "string" and title ~= "" then
+  title = okT and cleanText(title) or nil
+  -- the drive says "C418 - wait" but the tooltip says "Yellow - Bike Theme": the tooltip wins
+  local lore = type(it.lore) == "table" and cleanText(it.lore[1]) or nil
+  if lore and (not title or VANILLA[title]) then title = lore end
+  if title then
     db.cfg.slotTitles[loc] = { name = it.name, nbt = it.nbt, title = title }
     return title
   end
