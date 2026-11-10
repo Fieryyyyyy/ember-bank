@@ -41,8 +41,13 @@ On the computer's own screen: **R** rescans devices, **Q** quits.
 
 **How it plays:** when a song starts, the computer moves that disc from the chest into the disk drive and plays it. When the song ends, the disc goes back into the chest and the next one comes out. Discs don't wear out.
 
-Leave the drive alone while music is on. A disc you put in by hand gets moved into the music chest.
-- **Which chest:** the program picks the chest with the most discs in it. To choose another, use **Settings → Music chest**.
+Leave the drive alone while music is on. A disc you put in by hand gets moved into a music chest.
+- **Music chests:** you can have as many as you like. All their discs show up as one library.
+  - The first time it starts, the program picks the chest with the most discs.
+  - To add more: put a wired modem on the chest, connect it to the cable and right-click the modem so it turns red. Then do one of these:
+    - **Settings → Music chests:** tap the button and tap a chest to tick it (**[x]**) or untick it.
+    - **The Farm → Manage:** tap **Music** on the chest. Music chests are listed at the top, with **Not music** to remove one.
+  - A disc goes back into the chest it came from. If that chest is full, it goes into another music chest.
 - **Adding music:** put a disc in the chest and it shows up within 10 seconds. Take it out and it's gone from the list.
 - **Modded discs** work if the mod names their sound the normal way. If one can't play, its name goes red and it gets skipped.
 
@@ -69,6 +74,6 @@ Leave the drive alone while music is on. A disc you put in by hand gets moved in
 ## Settings
 
 - **Text size:** Auto picks the biggest text that still fits the TV. Turn it up or down with the arrows.
-- **Music chest** and **Record player:** pick which chest and which disk drive to use.
+- **Music chests** and **Record player:** pick which chests hold discs and which disk drive plays them.
 - **Rescan:** use after adding monitors, drives or chests. The program also does this by itself when a modem is turned on or off.
 - **Software:** **Check** shows the newest version, **Update** downloads it and restarts. Your farms and settings are kept in `home.db`.

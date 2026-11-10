@@ -6,7 +6,7 @@
 --    wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua home
 -- =====================================================
 
-local VERSION  = "1.0"
+local VERSION  = "1.1"
 local HOME_URL = "https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/home/home.lua"
 local DB_FILE  = "home.db"
 
@@ -44,7 +44,7 @@ local DISCS = {
 
 -- ---------- saved settings ----------
 local db = { cfg = {}, groups = {}, chests = {}, nextGroup = 1, queue = {} }
-local DEFAULTS = { uiScale = 0, musicChest = nil, drive = nil, shuffle = false, rep = "all", lens = {}, titles = {}, scanEvery = 10 }
+local DEFAULTS = { uiScale = 0, musicChests = {}, drive = nil, shuffle = false, rep = "all", lens = {}, titles = {}, scanEvery = 10 }
 
 local function loadDb()
   if fs.exists(DB_FILE) then
@@ -52,6 +52,7 @@ local function loadDb()
     if type(t) == "table" then for k, v in pairs(t) do db[k] = v end end
   end
   for k, v in pairs(DEFAULTS) do if db.cfg[k] == nil then db.cfg[k] = v end end
+  if db.cfg.musicChest then db.cfg.musicChests[db.cfg.musicChest] = true; db.cfg.musicChest = nil; db.cfg.musicPicked = true end   -- older versions had one
   db.groups = db.groups or {}; db.chests = db.chests or {}; db.queue = db.queue or {}
 end
 local function saveDb()
@@ -320,24 +321,34 @@ local function countDiscs(n)
   return c
 end
 
+local function isMusic(n) return db.cfg.musicChests[n] == true end
+local function musicChests()
+  local t = {}
+  for _, n in ipairs(dev.invs) do if isMusic(n) then t[#t + 1] = n end end
+  return t
+end
+
 local function scanLibrary()
-  local chest = db.cfg.musicChest
-  if not chest or not peripheral.isPresent(chest) then
+  -- nothing chosen yet: use the chest with the most discs
+  if next(db.cfg.musicChests) == nil and not db.cfg.musicPicked then
     local best, pick = 0, nil
     for _, n in ipairs(dev.invs) do
       local c = countDiscs(n)
       if c > best then best, pick = c, n end
     end
-    if pick then db.cfg.musicChest = pick; saveDb() end
-    chest = pick
+    if pick then db.cfg.musicChests[pick] = true; saveDb() end
   end
-  lib.chest = chest
+  lib.chests = musicChests()
+  lib.chest = lib.chests[1]
+  lib.perChest = {}
   local seen, list = {}, {}
-  if chest and peripheral.isPresent(chest) then
+  for _, chest in ipairs(lib.chests) do
     local ok, items = pcall(peripheral.wrap(chest).list)
+    local n = 0
     if ok and type(items) == "table" then
       for _, it in pairs(items) do
         if isDisc(it.name) then
+          n = n + it.count
           if seen[it.name] then seen[it.name].count = seen[it.name].count + it.count
           else
             local d = discInfo(it.name); d.count = it.count
@@ -348,6 +359,7 @@ local function scanLibrary()
         end
       end
     end
+    lib.perChest[chest] = n
   end
   -- the disc that's in the drive right now still belongs to the library
   local dn = db.cfg.drive
@@ -385,9 +397,17 @@ local function returnDisc()
   pcall(drv.stopAudio)
   local okP, present = pcall(drv.isDiskPresent)
   if okP and not present then return true end
-  if not lib.chest or not peripheral.isPresent(lib.chest) then return false end
-  local ok, moved = pcall(peripheral.wrap(lib.chest).pullItems, dn, 1)
-  return ok and moved and moved > 0
+  -- back to the chest it came from, or else any music chest with room
+  local order = {}
+  if player.from and isMusic(player.from) then order[1] = player.from end
+  for _, n in ipairs(musicChests()) do if n ~= player.from then order[#order + 1] = n end end
+  for _, n in ipairs(order) do
+    if peripheral.isPresent(n) then
+      local ok, moved = pcall(peripheral.wrap(n).pullItems, dn, 1)
+      if ok and moved and moved > 0 then return true end
+    end
+  end
+  return false
 end
 local function current() return player.cur and (lib.byKey[player.cur] or discInfo(player.cur)) end
 local function elapsed() return player.playing and (os.clock() - player.started) or 0 end
@@ -395,16 +415,21 @@ local function elapsed() return player.playing and (os.clock() - player.started)
 local function startDisc(d)
   local dn, drv = drive()
   if not drv then toast("No disk drive connected", P.red) return false end
-  if not lib.chest or not peripheral.isPresent(lib.chest) then toast("No music chest connected", P.red) return false end
-  if not returnDisc() then toast("The music chest is full - can't put the disc back", P.red) return false end
-  local chest = peripheral.wrap(lib.chest)
-  local ok, items = pcall(chest.list)
-  local slot
-  if ok and type(items) == "table" then
-    for s, it in pairs(items) do if it.name == d.key then slot = s break end end
+  local chests = musicChests()
+  if #chests == 0 then toast("No music chest connected", P.red) return false end
+  if not returnDisc() then toast("The music chests are full - can't put the disc back", P.red) return false end
+  local chest, slot, from
+  for _, n in ipairs(chests) do
+    local c = peripheral.wrap(n)
+    local ok, items = pcall(c.list)
+    if ok and type(items) == "table" then
+      for s, it in pairs(items) do if it.name == d.key then slot = s break end end
+    end
+    if slot then chest, from = c, n break end
   end
-  if not slot then toast(d.title .. " isn't in the music chest", P.red) return false end
+  if not slot then toast(d.title .. " isn't in a music chest", P.red) return false end
   local okM, moved = pcall(chest.pushItems, dn, slot, 1)
+  if okM and moved and moved > 0 then player.from = from end
   if not okM or not moved or moved < 1 then
     toast("Couldn't put the disc in the drive" .. (okM and "" or (": " .. tostring(moved))), P.red)
     return false
@@ -563,7 +588,7 @@ end
 local function scanFarm()
   local now = os.epoch("utc") / 1000
   for _, n in ipairs(dev.invs) do
-    if n ~= lib.chest then
+    if not isMusic(n) then
       local d = scanChest(n)
       farm.data[n] = d
       if d then
@@ -584,7 +609,7 @@ local function chestsOf(id)
   local t = {}
   for _, n in ipairs(dev.invs) do
     local c = db.chests[n]
-    if n ~= lib.chest and c and c.group == id then t[#t + 1] = n end
+    if not isMusic(n) and c and c.group == id then t[#t + 1] = n end
   end
   return t
 end
@@ -616,7 +641,7 @@ local function unassigned()
   local t = {}
   for _, n in ipairs(dev.invs) do
     local c = db.chests[n]
-    if n ~= lib.chest and not (c and c.group and groupById(c.group)) then t[#t + 1] = n end
+    if not isMusic(n) and not (c and c.group and groupById(c.group)) then t[#t + 1] = n end
   end
   return t
 end
@@ -894,7 +919,7 @@ local function musicLibrary(x, y1, w, y2)
   text(x + 13, y1, fit(#lib.list .. " discs  \7  " .. fmtLong(lib.total), w - 14), P.sub, P.bg)
   if #lib.list == 0 then
     text(x + 1, y1 + 2, fit("No music discs found.", w - 2), P.text, P.bg)
-    text(x + 1, y1 + 3, fit(lib.chest and ("Put discs in: " .. chestLabel(lib.chest)) or "Connect a chest of discs with a wired modem.", w - 2), P.sub, P.bg)
+    text(x + 1, y1 + 3, fit(lib.chest and ("Put discs in: " .. chestLabel(lib.chest)) or "Connect a chest of discs with a wired modem, then pick it in Settings.", w - 2), P.sub, P.bg)
     return
   end
   local aw = w - 2
@@ -1228,12 +1253,24 @@ local function farmManage(y1, y2)
   end }
   heading("CHESTS")
   if #dev.invs == 0 then rows[#rows + 1] = { h = 1, draw = function(x, y) text(x, y, "No chests connected. Put a wired modem on each chest and turn it on.", P.sub, P.bg) end } end
-  for _, n in ipairs(dev.invs) do
-    rows[#rows + 1] = { h = (wide or n == lib.chest) and 3 or 4, draw = function(x, y, w)
-      fill(x, y, w, (wide or n == lib.chest) and 2 or 3, P.card)
-      if n == lib.chest then
-        text(x + 1, y, fit(chestLabel(n), w - 20), P.text, P.card)
-        text(x + 1, y + 1, fit("\14 Music chest - " .. #lib.list .. " discs", w - 2), P.accent, P.card)
+  local ordered = musicChests()
+  for _, n in ipairs(dev.invs) do if not isMusic(n) then ordered[#ordered + 1] = n end end
+  for _, n in ipairs(ordered) do
+    rows[#rows + 1] = { h = (wide or isMusic(n)) and 3 or 4, draw = function(x, y, w)
+      fill(x, y, w, (wide or isMusic(n)) and 2 or 3, P.card)
+      if isMusic(n) then
+        text(x + 1, y, fit(chestLabel(n), w - 22), P.text, P.card)
+        text(x + 1, y + 1, fit("\14 Music chest - " .. ((lib.perChest or {})[n] or 0) .. " discs", w - 22), P.accent, P.card)
+        button(x + w - 20, y, "Not music", P.line, P.text, function()
+          askConfirm("Stop using " .. chestLabel(n) .. " for music? Its discs leave the library.", function()
+            db.cfg.musicChests[n] = nil; db.cfg.musicPicked = true; saveDb(); scanLibrary()
+          end)
+        end, 11, 2)
+        button(x + w - 8, y, "Name", P.line, P.text, function()
+          openKeyboard("Name this chest", (db.chests[n] or {}).label or "", function(v)
+            db.chests[n] = db.chests[n] or {}; db.chests[n].label = v ~= "" and v or nil; saveDb()
+          end)
+        end, 7, 2)
         return
       end
       local c = db.chests[n] or {}
@@ -1262,7 +1299,7 @@ local function farmManage(y1, y2)
       end, wide and 8 or 6, bh) + 1
       bx = button(bx, by, "Peek", P.line, P.text, function() ui.farmView = "chest"; ui.chest = n end, 6, bh) + 1
       button(bx, by, "Music", P.line, P.text, function()
-        askConfirm("Use " .. chestLabel(n) .. " as the music chest?", function() db.cfg.musicChest = n; saveDb(); scanLibrary() end)
+        askConfirm("Make " .. chestLabel(n) .. " a music chest? Its discs join your library and it leaves its farm.", function() db.cfg.musicChests[n] = true; db.cfg.musicPicked = true; saveDb(); scanLibrary() end)
       end, 7, bh)
     end }
   end
@@ -1333,16 +1370,22 @@ S.settings = function(y1, y2)
     button(x + 27, y, "\16", P.line, P.text, function() db.cfg.uiScale = SCALES[math.min(#SCALES, idx + 1)]; saveDb(); setupScreen() end, 3)
   end)
   heading("MUSIC")
-  row("Music chest", function(x, y)
-    button(x, y, fit(lib.chest and chestLabel(lib.chest) or "None found", 28), P.line, P.text, function()
+  local nm = #(lib.chests or {})
+  row("Music chests (" .. nm .. ")", function(x, y)
+    button(x, y, fit(nm == 0 and "None - tap to choose" or (nm == 1 and chestLabel(lib.chests[1]) or (nm .. " chests, " .. #lib.list .. " discs")), 28), P.line, P.text, function()
       local opts = {}
       for _, n in ipairs(dev.invs) do
+        local on = isMusic(n)
         local c = countDiscs(n)
-        opts[#opts + 1] = { label = chestLabel(n) .. (c > 0 and ("  (" .. c .. " discs)") or ""), col = c > 0 and P.accent or P.text,
-          fn = function() db.cfg.musicChest = n; saveDb(); scanLibrary() end }
+        opts[#opts + 1] = { label = (on and "[x] " or "[ ] ") .. chestLabel(n) .. (c > 0 and ("  (" .. c .. " discs)") or ""),
+          col = on and P.accent or (c > 0 and P.yellow or P.text),
+          fn = function()
+            db.cfg.musicChests[n] = (not on) or nil; db.cfg.musicPicked = true; saveDb(); scanLibrary()
+            toast((on and "Removed " or "Added ") .. chestLabel(n) .. (on and " from" or " to") .. " the music chests", P.accent)
+          end }
       end
       if #opts == 0 then toast("No chests connected", P.red) return end
-      openMenu("Which chest holds your discs?", opts)
+      openMenu("Tap a chest to add or remove it", opts)
     end, 31)
   end)
   if #dev.drives == 0 then
@@ -1509,7 +1552,7 @@ local function termStatus()
   term.setTextColor(colors.lime); print("EMBER HOME v" .. VERSION)
   term.setTextColor(colors.white)
   print("Showing on monitor: " .. tostring(dev.monitor))
-  print("Music chest: " .. tostring(lib.chest) .. " (" .. #lib.list .. " discs)")
+  print("Music chests: " .. #(lib.chests or {}) .. " (" .. #lib.list .. " discs)")
   print("Record player: " .. tostring((drive())) .. ", " .. #dev.invs .. " chests")
   print("")
   term.setTextColor(colors.lightGray)
