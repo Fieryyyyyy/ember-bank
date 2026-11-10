@@ -6,7 +6,7 @@
 --    wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua home
 -- =====================================================
 
-local VERSION  = "1.1"
+local VERSION  = "1.2"
 local HOME_URL = "https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/home/home.lua"
 local DB_FILE  = "home.db"
 
@@ -381,9 +381,17 @@ local function scanLibrary()
 end
 
 -- ---------- the disc player: discs move from the chest into a disk drive and back ----------
+-- a drive touching the computer is called "left", "right"...; chests on the cable can't reach it,
+-- so a drive on the wired network always wins
+local SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
+local function isSide(n) return n ~= nil and SIDES[n] == true end
 local function drive()
   local n = db.cfg.drive
-  if not (n and peripheral.isPresent(n)) then n = dev.drives[1] end
+  if not (n and peripheral.isPresent(n)) or isSide(n) then
+    local pick = nil
+    for _, d in ipairs(dev.drives) do if not isSide(d) then pick = d break end end
+    if pick then n = pick elseif not (n and peripheral.isPresent(n)) then n = dev.drives[1] end
+  end
   return n, n and peripheral.wrap(n)
 end
 local function stopSound()
@@ -431,7 +439,14 @@ local function startDisc(d)
   local okM, moved = pcall(chest.pushItems, dn, slot, 1)
   if okM and moved and moved > 0 then player.from = from end
   if not okM or not moved or moved < 1 then
-    toast("Couldn't put the disc in the drive" .. (okM and "" or (": " .. tostring(moved))), P.red)
+    if isSide(dn) then
+      toast("Put a wired modem on the disk drive and cable it up - it can't just touch the computer", P.red)
+    elseif isSide(from) then
+      toast("Put a wired modem on the music chest and cable it up - it can't just touch the computer", P.red)
+    else
+      toast("Couldn't put the disc in the drive" .. (okM and "" or (": " .. tostring(moved))), P.red)
+    end
+    ui.toastUntil = os.clock() + 10
     return false
   end
   local okA, has = pcall(drv.hasAudio)
@@ -1391,6 +1406,12 @@ S.settings = function(y1, y2)
   if #dev.drives == 0 then
     rows[#rows + 1] = { h = 2, draw = function(x, y, w) text(x + 1, y, fit("No disk drive found - it's the record player. Connect one with a wired modem.", w - 2), P.red, P.bg) end }
   else
+    local dn0 = drive()
+    if isSide(dn0) then
+      rows[#rows + 1] = { h = 2, draw = function(x, y, w)
+        text(x + 1, y, fit("! The disk drive is touching the computer (" .. dn0 .. "). Put a wired modem on it and cable it to the chests.", w - 2), P.red, P.bg)
+      end }
+    end
     row("Record player (disk drive)", function(x, y)
       local dn = drive()
       button(x, y, fit(dn or "none", 28), P.line, P.text, function()
