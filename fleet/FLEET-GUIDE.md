@@ -110,6 +110,7 @@ depot <x> <y> <z>
 | `rename <id> <name>` | Rename a turtle |
 | `pause` / `resume` / `recall` / `refuel` / `cancel` `<id or all>` | Control turtles |
 | `marker x y z` | Set a job start point by hand |
+| `room x1 y1 z1 x2 y2 z2 [turtles]` | Dig out a room between two corners (opens the job on the monitor to check and launch) |
 | `forget <id>` | Remove a turtle from the fleet (frees its lane) |
 | `list` | List turtles, lanes and states |
 | `resetstats` | Clear the ore totals |
@@ -174,7 +175,24 @@ Use the `<` `>` and `-` `+` buttons to set:
 |---|---|
 | **Branch mine** | Target ore (sets the Y automatically), Y level, direction, start point, main tunnel length, branch length, branch spacing, branch sides, scan walls, follow veins, 2-high walkable tunnels, number of turtles |
 | **Quarry** | Top Y, bottom Y, length, width, direction, start point, number of turtles (the area is split into strips) |
-| **Tunnel / room** | Floor Y, width, height, length, direction, start point |
+| **Tunnel** | Floor Y, width, height, length, direction, start point |
+| **Room (2 corners)** | Corner 1 X Y Z, Corner 2 X Y Z, number of turtles. Everything between the two corners is dug out, corners included |
+
+**Digging a room:**
+1. Stand in one top corner of the room you want, press **F3**, and note your X Y Z. Then do the same at the opposite bottom corner.
+   - Use the coordinates of the blocks to dig, not where you're standing. The block under your feet is Y minus 1.
+2. On the control computer, type the two corners:
+   ```
+   room 120 70 -40 135 64 -28
+   ```
+   That opens a ready-made Room job on the monitor. Check the size, then press **LAUNCH**. Add a number at the end to use more turtles, for example `... -28 3`.
+3. Or set it on the monitor: **+ New job**, then choose **Room (2 corners)** as the job type.
+   - Each corner has **Use marker**, which takes the spot where you last pressed **Mark my position** on the pocket app, and **Use depot**.
+   - Adjust the numbers with `-` `+`.
+
+**Details:**
+- The corners can be in any order. Turtles dig the room from the top layer down, and never go below Y -59 (bedrock).
+- With several turtles, the room is split into slices along its longest side, one slice per turtle.
 
 - **Start point:** "Depot + distance" goes that many blocks from the dock in the chosen direction. "Pocket marker" starts where you last pressed **Mark my position** on the pocket app.
 - **Width** always extends to the **right** of the chosen direction.

@@ -6,7 +6,7 @@
 -- =====================================================
 
 local PROTOCOL      = "fleetmine"
-local VERSION       = "2.1"
+local VERSION       = "2.2"
 local REPO          = "https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/"
 local MINER_URL     = REPO .. "fleet/miner.lua"
 local CONTROL_URL   = REPO .. "fleet/control.lua"
@@ -219,6 +219,10 @@ local function newWizard(preset)
     turtles = 1, length = 32, width = 16, height = 3, topY = 60, bottomY = -58, page = 1,
   }
   if db.cfg.dock then f.topY = db.cfg.dock.y - 1 end
+  -- room corners start next to the depot so the numbers are close to where you are
+  local D = db.cfg.dock or { x = 0, y = 64, z = 0 }
+  f.ax, f.ay, f.az = D.x + 5, D.y - 1, D.z + 5
+  f.bx, f.by, f.bz = D.x + 14, D.y - 4, D.z + 14
   for k, v in pairs(preset or {}) do f[k] = v end
   if preset and preset.target and not preset.y then
     local o = oreByKey(preset.target)
@@ -261,6 +265,23 @@ local function buildJobs(f, ids)
         desc = "Branch " .. targetLabel(f.target) .. " Y" .. f.y,
       }
     end
+  elseif f.kind == "room" then
+    -- a box between two corners, split into slices along its longest side
+    local x1, x2 = math.min(f.ax, f.bx), math.max(f.ax, f.bx)
+    local z1, z2 = math.min(f.az, f.bz), math.max(f.az, f.bz)
+    local y1, y2 = math.max(-59, math.min(f.ay, f.by)), math.max(f.ay, f.by)
+    local alongX = (x2 - x1) >= (z2 - z1)
+    local span = alongX and (x2 - x1 + 1) or (z2 - z1 + 1)
+    local per = math.ceil(span / k)
+    local size = (x2 - x1 + 1) .. "x" .. (z2 - z1 + 1) .. "x" .. (y2 - y1 + 1)
+    for i, id in ipairs(ids) do
+      local s0, s1 = (i - 1) * per, math.min(span, i * per) - 1
+      if s0 <= s1 then
+        local job = { kind = "box", x1 = x1, x2 = x2, z1 = z1, z2 = z2, y1 = y1, y2 = y2, desc = "Room " .. size }
+        if alongX then job.x1, job.x2 = x1 + s0, x1 + s1 else job.z1, job.z2 = z1 + s0, z1 + s1 end
+        jobs[id] = job
+      end
+    end
   else
     local L, Wd = f.length, f.width
     local y1, y2
@@ -287,6 +308,14 @@ local function estimate(f)
   if f.kind == "branch" then
     local nb = math.floor(f.mainLen / f.spacing)
     moves = f.mainLen + nb * (f.sides == "both" and 2 or 1) * f.branchLen * 2
+  elseif f.kind == "room" then
+    local w = math.abs(f.ax - f.bx) + 1
+    local l = math.abs(f.az - f.bz) + 1
+    local h = math.max(f.ay, f.by) - math.max(-59, math.min(f.ay, f.by)) + 1
+    moves = math.ceil(w * l * math.ceil(math.max(1, h) / 3) / math.max(1, f.only and 1 or f.turtles))
+    local D = db.cfg.dock
+    local travel = D and 2 * (math.abs(math.floor((f.ax + f.bx) / 2) - D.x) + math.abs(math.floor((f.az + f.bz) / 2) - D.z) + math.abs(D.y - math.min(f.ay, f.by)) + 20) or 0
+    return moves, travel
   else
     local h = (f.kind == "quarry") and (f.topY - math.max(-59, f.bottomY) + 1) or f.height
     moves = f.length * f.width * math.ceil(math.max(1, h) / 3)
@@ -306,6 +335,7 @@ local function launch(f)
   if not db.cfg.dock then return false, "Set the depot first (type: depot x y z on the PC)" end
   if f.startMode == "marker" and not db.marker then return false, "No pocket marker set yet" end
   if f.kind == "quarry" and f.topY < f.bottomY then return false, "Top Y must be above bottom Y" end
+  if f.kind == "room" and math.max(f.ay, f.by) < -59 then return false, "The room is all bedrock - raise the Y" end
   local ids = {}
   if f.only then
     if not canTakeJob(db.turtles[f.only]) then return false, "That turtle is busy - wait until it's parked" end
@@ -975,15 +1005,23 @@ local function isKind(...)
   return function(f) for _, k in ipairs(kinds) do if f.kind == k then return true end end return false end
 end
 local FIELDS = {
-  { k = "kind", label = "Job type", t = "choice", opts = { "branch", "quarry", "tunnel" }, names = { "Branch mine", "Quarry", "Tunnel / room" } },
+  { k = "kind", label = "Job type", t = "choice", opts = { "branch", "quarry", "tunnel", "room" }, names = { "Branch mine", "Quarry", "Tunnel", "Room (2 corners)" } },
+  { t = "corner", which = "a", label = "Corner 1 (e.g. top corner)", show = isKind("room") },
+  { k = "ax", label = "  Corner 1 X", t = "num", s1 = 1, s2 = 16, mn = -30000000, mx = 30000000, show = isKind("room") },
+  { k = "ay", label = "  Corner 1 Y", t = "num", s1 = 1, s2 = 10, mn = -64, mx = 319, show = isKind("room") },
+  { k = "az", label = "  Corner 1 Z", t = "num", s1 = 1, s2 = 16, mn = -30000000, mx = 30000000, show = isKind("room") },
+  { t = "corner", which = "b", label = "Corner 2 (the opposite bottom corner)", show = isKind("room") },
+  { k = "bx", label = "  Corner 2 X", t = "num", s1 = 1, s2 = 16, mn = -30000000, mx = 30000000, show = isKind("room") },
+  { k = "by", label = "  Corner 2 Y", t = "num", s1 = 1, s2 = 10, mn = -64, mx = 319, show = isKind("room") },
+  { k = "bz", label = "  Corner 2 Z", t = "num", s1 = 1, s2 = 16, mn = -30000000, mx = 30000000, show = isKind("room") },
   { k = "target", label = "Target ore", t = "choice", opts = ORE_KEYS, names = ORE_NAMES, show = isKind("branch") },
   { k = "y", label = "Mining Y level", t = "num", s1 = 1, s2 = 10, mn = -59, mx = 319, show = isKind("branch") },
   { k = "y", label = "Floor Y level", t = "num", s1 = 1, s2 = 10, mn = -59, mx = 319, show = isKind("tunnel") },
   { k = "topY", label = "Top Y", t = "num", s1 = 1, s2 = 10, mn = -59, mx = 319, show = isKind("quarry") },
   { k = "bottomY", label = "Bottom Y", t = "num", s1 = 1, s2 = 10, mn = -59, mx = 319, show = isKind("quarry") },
-  { k = "dir", label = "Direction", t = "choice", opts = { 0, 1, 2, 3 }, names = { "North", "East", "South", "West" } },
-  { k = "startMode", label = "Start point", t = "choice", opts = { "depot", "marker" }, names = { "Depot + distance", "Pocket marker" } },
-  { k = "dist", label = "Distance from depot", t = "num", s1 = 4, s2 = 32, mn = 3, mx = 5000, show = function(f) return f.startMode == "depot" end },
+  { k = "dir", label = "Direction", t = "choice", opts = { 0, 1, 2, 3 }, names = { "North", "East", "South", "West" }, show = function(f) return f.kind ~= "room" end },
+  { k = "startMode", label = "Start point", t = "choice", opts = { "depot", "marker" }, names = { "Depot + distance", "Pocket marker" }, show = function(f) return f.kind ~= "room" end },
+  { k = "dist", label = "Distance from depot", t = "num", s1 = 4, s2 = 32, mn = 3, mx = 5000, show = function(f) return f.startMode == "depot" and f.kind ~= "room" end },
   { k = "mainLen", label = "Main tunnel length", t = "num", s1 = 4, s2 = 16, mn = 4, mx = 2000, show = isKind("branch") },
   { k = "branchLen", label = "Branch length", t = "num", s1 = 1, s2 = 8, mn = 1, mx = 256, show = isKind("branch") },
   { k = "spacing", label = "Branch spacing", t = "num", s1 = 1, s2 = 2, mn = 2, mx = 16, show = isKind("branch") },
@@ -1010,7 +1048,13 @@ local function wizardScreen()
     y = para(2, y + 1, est, colors.lightGray) + 1
     for _, fd in ipairs(FIELDS) do
       if not fd.show or fd.show(f) then
-        if fd.t == "num" then y = numRow(y, fd.label, f, fd.k, fd.s1, fd.s2, fd.mn, fd.mx)
+        if fd.t == "corner" then
+          local x, aw, cy, ny = formArea(y, fd.label)
+          local hw = math.floor((aw - 1) / 2)
+          btn("corner", x, cy, hw, "Use marker", db.marker and colors.blue or colors.gray, colors.white, { which = fd.which, src = "marker" })
+          btn("corner", x + hw + 1, cy, aw - hw - 1, "Use depot", colors.gray, colors.white, { which = fd.which, src = "depot" })
+          y = ny
+        elseif fd.t == "num" then y = numRow(y, fd.label, f, fd.k, fd.s1, fd.s2, fd.mn, fd.mx)
         elseif fd.t == "choice" then y = choiceRow(y, fd.label, f, fd.k, fd.opts, fd.names)
         else y = toggleRow(y, fd.label, f, fd.k) end
       end
@@ -1195,6 +1239,13 @@ local function onTouch(x, y)
     local ok, msg = launch(ui.wiz)
     toast(msg, ok)
     if ok then ui.wiz, ui.detail, ui.tab = nil, nil, "jobs" end
+  elseif h.id == "corner" then
+    local p = (d.src == "marker") and db.marker or db.cfg.dock
+    if not p then toast(d.src == "marker" and "No pocket marker yet - set one with the pocket remote" or "Set the depot first", false)
+    elseif ui.wiz then
+      ui.wiz[d.which .. "x"], ui.wiz[d.which .. "y"], ui.wiz[d.which .. "z"] = p.x, p.y, p.z
+      toast("Corner " .. (d.which == "a" and 1 or 2) .. " set to " .. p.x .. ", " .. p.y .. ", " .. p.z, true)
+    end
   elseif h.id == "num" then
     d.obj[d.k] = math.max(d.mn, math.min(d.mx, d.obj[d.k] + d.d))
     if d.obj == db.cfg then ui.cfgDirty = true end
@@ -1246,6 +1297,7 @@ local commands, help = {}, {
   { "depot <x> <y> <z>", "set the dock position (where turtles unload)" },
   { "junk add <id> / junk del <id> / junk list", "edit the junk list" },
   { "marker <x> <y> <z>", "set the job marker by hand" },
+  { "room <x1> <y1> <z1> <x2> <y2> <z2> [turtles]", "dig out a room between two corners (opens the job on the monitor)" },
   { "rename <id> <name>", "rename a turtle" },
   { "pause|resume|recall|refuel|cancel <id|all>", "control turtles" },
   { "forget <id>", "remove a turtle from the fleet" },
@@ -1280,6 +1332,18 @@ function commands.marker(x, y, z)
   if not (x and y and z) then error("Usage: marker <x> <y> <z>", 0) end
   db.marker = { x = x, y = y, z = z }
   saveDb(); print("Marker set.")
+end
+function commands.room(...)
+  local a = {}
+  for i, v in ipairs({ ... }) do a[i] = tonumber(v) end
+  if #a < 6 or not (a[1] and a[2] and a[3] and a[4] and a[5] and a[6]) then
+    error("Usage: room <x1> <y1> <z1> <x2> <y2> <z2> [turtles]", 0)
+  end
+  ui.wiz = newWizard({ kind = "room", ax = a[1], ay = a[2], az = a[3], bx = a[4], by = a[5], bz = a[6], turtles = a[7] or 1 })
+  ui.detail, ui.scroll = nil, 0
+  local f = ui.wiz
+  print("Room " .. (math.abs(f.ax - f.bx) + 1) .. " x " .. (math.abs(f.az - f.bz) + 1) .. " wide, " .. (math.abs(f.ay - f.by) + 1) .. " high.")
+  print("Check it on the monitor and press LAUNCH.")
 end
 function commands.rename(id, ...)
   id = tonumber(id)
