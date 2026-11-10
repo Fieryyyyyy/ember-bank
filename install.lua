@@ -2,7 +2,7 @@
 --  EMBER INSTALLER - downloads the latest version from GitHub
 --  Use on any computer:
 --    wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua <role>
---  Roles: bank atm shop gps control miner remote ember
+--  Roles: bank atm shop gps control miner remote ember home
 --  Running it again updates the program. Your settings at the top of
 --  the file (ATM password, bank ID, GPS coordinates...) are kept.
 -- =====================================================
@@ -18,8 +18,9 @@ local ROLES = {
   miner   = { file = "fleet/miner.lua",     to = "startup.lua", banner = "FLEET MINER",                   what = "Mining turtle" },
   remote  = { file = "fleet/remote.lua",    to = "fleet",       banner = "FLEET REMOTE",                  what = "Fleet pocket remote" },
   ember   = { file = "control/ember.lua",   to = "ember",       banner = "EMBER CONTROL",                 what = "Ember Control (admin app)" },
+  home    = { file = "home/home.lua",       to = "startup.lua", banner = "EMBER HOME",                    what = "Home TV (music + farm)" },
 }
-local ORDER = { "bank", "atm", "shop", "gps", "control", "miner", "remote", "ember" }
+local ORDER = { "bank", "atm", "shop", "gps", "control", "miner", "remote", "ember", "home" }
 
 -- settings lines copied from the old file into the new one
 local KEEP = { "local ADMIN_PASSWORD", "local BANK_ID", "local CONTROL_ID", "local X, Y, Z",

@@ -3,6 +3,7 @@
 ComputerCraft programs for our Cobbleverse server:
 - **Ember Bank:** bank server, ATMs and vending shops.
 - **Fleet Mining:** GPS towers, mining turtles, a control room and a pocket remote.
+- **Ember Home:** a TV for your house with a disc music player and farm chest monitor. See [home/HOME-GUIDE.md](home/HOME-GUIDE.md).
 - **Ember Control:** an admin pocket app for all of it.
 
 ## Install or update
@@ -19,6 +20,7 @@ On each computer, run the line for its job. Running the same line again later up
 | Mining turtle | `wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua miner` |
 | Fleet pocket remote | `wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua remote` |
 | Ember Control (admin pocket) | `wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua ember` |
+| Home TV (music + farm) | `wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua home` |
 
 Then type `reboot`. For the pocket apps, type `fleet` or `ember` to open them.
 
