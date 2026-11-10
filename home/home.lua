@@ -6,7 +6,7 @@
 --    wget run https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/install.lua home
 -- =====================================================
 
-local VERSION  = "1.2"
+local VERSION  = "1.3"
 local HOME_URL = "https://raw.githubusercontent.com/Fieryyyyyy/ember-bank/main/home/home.lua"
 local DB_FILE  = "home.db"
 
@@ -292,24 +292,38 @@ local lib = { list = {}, byKey = {}, total = 0, chest = nil }
 local player = { qi = 0, playing = false, paused = false, started = 0, cur = nil }
 
 local function isDisc(name) return name:find("music_disc", 1, true) and not name:find("fragment", 1, true) end
-local function discInfo(name)
+-- Modpacks (like Cobbleverse) reuse vanilla disc items with a different song inside, so a disc is
+-- identified by its item id plus the hash of its extra data ("nbt").
+local function keyOf(it) return it.nbt and (it.name .. "@" .. it.nbt) or it.name end
+local function itemOf(key) return (key:match("^([^@]+)")) end
+
+local function discInfo(key)
+  local name = itemOf(key)
   local ns, rest = name:match("^([^:]+):(.+)$")
   ns, rest = ns or "minecraft", rest or name
-  local short = rest:match("^music_disc_(.+)$")
-  local sound = short and (ns .. ":music_disc." .. short) or name
-  short = short or rest
+  local short = rest:match("^music_disc_(.+)$") or rest
+  local known = db.cfg.titles[key]          -- "Artist - Title", read from the disk drive
   local v = ns == "minecraft" and DISCS[short]
-  if v then return { key = name, title = v[1], artist = v[2], len = db.cfg.lens[name] or v[3], col = v[4], sound = sound } end
+  local custom = key:find("@", 1, true) ~= nil
+  local d = { key = key, item = name }
+  if v and ((not known and not custom) or known == v[2] .. " - " .. v[1]) then
+    d.title, d.artist, d.len, d.col, d.vanilla = v[1], v[2], db.cfg.lens[key] or v[3], v[4], true
+    return d
+  end
   local hsh = 0
-  for i = 1, #name do hsh = (hsh * 31 + name:byte(i)) % 997 end
-  local title, artist = pretty(short), ns ~= "minecraft" and pretty(ns) or "Unknown artist"
-  local known = db.cfg.titles[name]          -- "Artist - Title", read from the drive once it has played
+  for i = 1, #key do hsh = (hsh * 31 + key:byte(i)) % 997 end
+  d.col = ART_COLS[hsh % #ART_COLS + 1]
+  d.title, d.artist = pretty(short), ns ~= "minecraft" and pretty(ns) or "Unknown artist"
   if known then
     local a, t = known:match("^(.-) %- (.+)$")
-    if a then artist, title = a, t else title = known end
+    if a then d.artist, d.title = a, t else d.title = known end
+  else
+    d.unknown = true
+    if custom then d.title, d.artist = "New disc", "reading its name..." end
   end
-  return { key = name, title = title, artist = artist,
-           len = db.cfg.lens[name] or 180, col = ART_COLS[hsh % #ART_COLS + 1], sound = sound }
+  d.len = db.cfg.lens[key] or 180
+  d.guessLen = not db.cfg.lens[key]
+  return d
 end
 
 local function countDiscs(n)
@@ -328,6 +342,20 @@ local function musicChests()
   return t
 end
 
+-- a drive touching the computer is called "left", "right"...; chests on the cable can't reach it,
+-- so a drive on the wired network always wins
+local SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
+local function isSide(n) return n ~= nil and SIDES[n] == true end
+local function drive()
+  local n = db.cfg.drive
+  if not (n and peripheral.isPresent(n)) or isSide(n) then
+    local pick = nil
+    for _, d in ipairs(dev.drives) do if not isSide(d) then pick = d break end end
+    if pick then n = pick elseif not (n and peripheral.isPresent(n)) then n = dev.drives[1] end
+  end
+  return n, n and peripheral.wrap(n)
+end
+
 local function scanLibrary()
   -- nothing chosen yet: use the chest with the most discs
   if next(db.cfg.musicChests) == nil and not db.cfg.musicPicked then
@@ -342,37 +370,30 @@ local function scanLibrary()
   lib.chest = lib.chests[1]
   lib.perChest = {}
   local seen, list = {}, {}
+  local function add(it, inDrive)
+    local k = keyOf(it)
+    if seen[k] then seen[k].count = seen[k].count + it.count return end
+    local d = discInfo(k); d.count = it.count; d.inDrive = inDrive
+    local old = lib.byKey[k]
+    if old then d.bad, d.tried = old.bad, old.tried end
+    seen[k] = d; list[#list + 1] = d
+  end
   for _, chest in ipairs(lib.chests) do
     local ok, items = pcall(peripheral.wrap(chest).list)
     local n = 0
     if ok and type(items) == "table" then
       for _, it in pairs(items) do
-        if isDisc(it.name) then
-          n = n + it.count
-          if seen[it.name] then seen[it.name].count = seen[it.name].count + it.count
-          else
-            local d = discInfo(it.name); d.count = it.count
-            local old = lib.byKey[it.name]
-            if old and old.bad then d.bad = true end
-            seen[it.name] = d; list[#list + 1] = d
-          end
-        end
+        if isDisc(it.name) then n = n + it.count; add(it, false) end
       end
     end
     lib.perChest[chest] = n
   end
   -- the disc that's in the drive right now still belongs to the library
-  local dn = db.cfg.drive
-  if not (dn and peripheral.isPresent(dn)) then dn = dev.drives[1] end
+  local dn = drive()
   if dn then
     local okL, inDrive = pcall(peripheral.wrap(dn).list)
     if okL and type(inDrive) == "table" then
-      for _, it in pairs(inDrive) do
-        if isDisc(it.name) and not seen[it.name] then
-          local d = discInfo(it.name); d.count = 1; d.inDrive = true
-          seen[it.name] = d; list[#list + 1] = d
-        end
-      end
+      for _, it in pairs(inDrive) do if isDisc(it.name) and not seen[keyOf(it)] then add(it, true) end end
     end
   end
   table.sort(list, function(a, b) return a.title:lower() < b.title:lower() end)
@@ -381,31 +402,30 @@ local function scanLibrary()
 end
 
 -- ---------- the disc player: discs move from the chest into a disk drive and back ----------
--- a drive touching the computer is called "left", "right"...; chests on the cable can't reach it,
--- so a drive on the wired network always wins
-local SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
-local function isSide(n) return n ~= nil and SIDES[n] == true end
-local function drive()
-  local n = db.cfg.drive
-  if not (n and peripheral.isPresent(n)) or isSide(n) then
-    local pick = nil
-    for _, d in ipairs(dev.drives) do if not isSide(d) then pick = d break end end
-    if pick then n = pick elseif not (n and peripheral.isPresent(n)) then n = dev.drives[1] end
-  end
-  return n, n and peripheral.wrap(n)
+-- only one job at a time may move discs in and out of the drive
+local lockOwner, lockDepth = nil, 0
+local function locked(fn, ...)
+  local me = coroutine.running()
+  while lockOwner and lockOwner ~= me do sleep(0.05) end
+  lockOwner, lockDepth = me, lockDepth + 1
+  local r = table.pack(pcall(fn, ...))
+  lockDepth = lockDepth - 1
+  if lockDepth == 0 then lockOwner = nil end
+  if not r[1] then error(r[2], 0) end
+  return table.unpack(r, 2, r.n)
 end
+
 local function stopSound()
   local _, drv = drive()
   if drv then pcall(drv.stopAudio) end
 end
--- put whatever is in the drive back in the music chest
-local function returnDisc()
+-- put whatever is in the drive back in a music chest (the one it came from first)
+local function returnDiscRaw()
   local dn, drv = drive()
   if not drv then return true end
   pcall(drv.stopAudio)
   local okP, present = pcall(drv.isDiskPresent)
   if okP and not present then return true end
-  -- back to the chest it came from, or else any music chest with room
   local order = {}
   if player.from and isMusic(player.from) then order[1] = player.from end
   for _, n in ipairs(musicChests()) do if n ~= player.from then order[#order + 1] = n end end
@@ -417,27 +437,43 @@ local function returnDisc()
   end
   return false
 end
+local function returnDisc() return locked(returnDiscRaw) end
 local function current() return player.cur and (lib.byKey[player.cur] or discInfo(player.cur)) end
 local function elapsed() return player.playing and (os.clock() - player.started) or 0 end
 
-local function startDisc(d)
+-- find a disc in the music chests: returns chest name, slot
+local function findDisc(key)
+  for _, n in ipairs(musicChests()) do
+    local ok, items = pcall(peripheral.wrap(n).list)
+    if ok and type(items) == "table" then
+      for s, it in pairs(items) do if keyOf(it) == key then return n, s end end
+    end
+  end
+end
+
+-- remember the song name the drive reports for this disc
+local function learnTitle(d, drv)
+  local okT, title = pcall(drv.getAudioTitle)
+  if okT and type(title) == "string" and title ~= "" then
+    if db.cfg.titles[d.key] ~= title then
+      db.cfg.titles[d.key] = title
+      local nd = discInfo(d.key)
+      d.title, d.artist, d.len, d.col, d.unknown, d.guessLen = nd.title, nd.artist, nd.len, nd.col, nil, nd.guessLen
+      return true
+    end
+    d.unknown = nil
+  end
+  return false
+end
+
+local function startDiscRaw(d)
   local dn, drv = drive()
   if not drv then toast("No disk drive connected", P.red) return false end
-  local chests = musicChests()
-  if #chests == 0 then toast("No music chest connected", P.red) return false end
-  if not returnDisc() then toast("The music chests are full - can't put the disc back", P.red) return false end
-  local chest, slot, from
-  for _, n in ipairs(chests) do
-    local c = peripheral.wrap(n)
-    local ok, items = pcall(c.list)
-    if ok and type(items) == "table" then
-      for s, it in pairs(items) do if it.name == d.key then slot = s break end end
-    end
-    if slot then chest, from = c, n break end
-  end
+  if #musicChests() == 0 then toast("No music chest connected", P.red) return false end
+  if not returnDiscRaw() then toast("The music chests are full - can't put the disc back", P.red) return false end
+  local from, slot = findDisc(d.key)
   if not slot then toast(d.title .. " isn't in a music chest", P.red) return false end
-  local okM, moved = pcall(chest.pushItems, dn, slot, 1)
-  if okM and moved and moved > 0 then player.from = from end
+  local okM, moved = pcall(peripheral.wrap(from).pushItems, dn, slot, 1)
   if not okM or not moved or moved < 1 then
     if isSide(dn) then
       toast("Put a wired modem on the disk drive and cable it up - it can't just touch the computer", P.red)
@@ -449,19 +485,39 @@ local function startDisc(d)
     ui.toastUntil = os.clock() + 10
     return false
   end
+  player.from = from
   local okA, has = pcall(drv.hasAudio)
-  if okA and not has then d.bad = true; toast("Can't play " .. d.title, P.red); returnDisc() return false end
-  local okT, title = pcall(drv.getAudioTitle)
-  if okT and type(title) == "string" and title ~= "" and not DISCS[(d.key:match("music_disc_(.+)$") or "")] then
-    if db.cfg.titles[d.key] ~= title then
-      db.cfg.titles[d.key] = title
-      local nd = discInfo(d.key)
-      d.title, d.artist = nd.title, nd.artist
-    end
-  end
+  if okA and not has then d.bad = true; toast("Can't play " .. d.title, P.red); returnDiscRaw() return false end
+  if learnTitle(d, drv) then saveDb() end
   drv.playAudio()
   player.cur, player.playing, player.paused, player.started = d.key, true, false, os.clock()
   return true
+end
+local function startDisc(d) return locked(startDiscRaw, d) end
+
+-- while nothing is playing, slip each new disc into the drive for a moment to read its song name
+local function learnNames()
+  local changed = false
+  for _, d in ipairs(lib.list) do
+    if player.playing or player.paused then break end
+    if d.unknown and not d.tried and not d.inDrive then
+      d.tried = true
+      locked(function()
+        local dn, drv = drive()
+        if not drv or player.playing or player.paused then return end
+        local okP, present = pcall(drv.isDiskPresent)
+        if not okP or present then return end
+        local from, slot = findDisc(d.key)
+        if not slot then return end
+        local okM, moved = pcall(peripheral.wrap(from).pushItems, dn, slot, 1)
+        if not okM or not moved or moved < 1 then return end
+        if learnTitle(d, drv) then changed = true end
+        local okB, back = pcall(peripheral.wrap(from).pullItems, dn, 1)
+        if not okB or not back or back < 1 then player.from = from; returnDiscRaw() end
+      end)
+    end
+  end
+  if changed then saveDb(); scanLibrary(); os.queueEvent("home_redraw") end
 end
 
 local function shuffled(keys)
@@ -1012,6 +1068,20 @@ local function musicNow(x, y1, w, y2)
   bar(tx, ty, tw, len > 0 and el / len or 0, P.accent, P.line); ty = ty + 1
   text(tx, ty, fmtTime(el), P.sub, P.bg)
   text(tx + tw - #fmtTime(len), ty, fmtTime(len), P.sub, P.bg); ty = ty + 2
+  -- song length: the game can't tell us how long a modded song is, so it can be set here
+  if d and player.cur == d.key and not d.vanilla then
+    local function setLen(dl) d.len = clamp(d.len + dl, 10, 1200); d.guessLen = false; db.cfg.lens[d.key] = d.len; saveDb() end
+    text(tx, ty, d.guessLen and "Length (guess)" or "Song length", d.guessLen and P.yellow or P.sub, P.bg)
+    local lx = tx + 16
+    local small = lx + 26 > tx + tw + 1
+    if small then lx = tx; ty = ty + 1 end
+    local w10, w1 = small and 4 or 6, small and 3 or 5
+    lx = button(lx, ty, small and "-10" or "-10s", P.card, P.text, function() setLen(-10) end, w10) + 1
+    lx = button(lx, ty, small and "-1" or "-1s", P.card, P.text, function() setLen(-1) end, w1) + 1
+    lx = button(lx, ty, small and "+1" or "+1s", P.card, P.text, function() setLen(1) end, w1) + 1
+    button(lx, ty, small and "+10" or "+10s", P.card, P.text, function() setLen(10) end, w10)
+    ty = ty + 2
+  end
   -- big controls: one row if it fits, otherwise shuffle/repeat go on a row underneath
   local bh = (y2 - ty >= 9) and 3 or 1
   local sh, on = db.cfg.shuffle, db.cfg.rep ~= "off"
@@ -1612,6 +1682,7 @@ end
 local function scanLoop()
   while true do
     scanLibrary()
+    learnNames()
     scanFarm()
     os.queueEvent("home_redraw")
     sleep(db.cfg.scanEvery or 10)
@@ -1636,7 +1707,7 @@ end
 if HOME_TEST then
   return { main = main, redraw = redraw, onTouch = onTouch, ui = ui, db = db, lib = lib, player = player, farm = farm,
            dev = dev, scanDevices = scanDevices, setupScreen = setupScreen, scanLibrary = scanLibrary, scanFarm = scanFarm,
-           musicTick = musicTick, nextTrack = nextTrack, playDisc = playDisc, shufflePlay = shufflePlay, togglePlay = togglePlay,
+           musicTick = musicTick, learnNames = learnNames, nextTrack = nextTrack, playDisc = playDisc, shufflePlay = shufflePlay, togglePlay = togglePlay,
            hits = function() return hits end, fb = function() return fb end, size = function() return W, H end, loadDb = loadDb }
 end
 main()

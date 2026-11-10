@@ -49,13 +49,16 @@ Leave the drive alone while music is on. A disc you put in by hand gets moved in
     - **The Farm → Manage:** tap **Music** on the chest. Music chests are listed at the top, with **Not music** to remove one.
   - A disc goes back into the chest it came from. If that chest is full, it goes into another music chest.
 - **Adding music:** put a disc in the chest and it shows up within 10 seconds. Take it out and it's gone from the list.
-- **Modded discs** work if the mod names their sound the normal way. If one can't play, its name goes red and it gets skipped.
+- **Modded discs**, like Cobbleverse's Poké Discs, work too.
+  - The names come from the disc itself. When nothing is playing, the computer slips each new disc into the drive for a moment and reads its song name, such as "Yellow - Bike Theme". New discs show as "New disc" for a few seconds until then.
+  - Poké Discs that look like the same item but hold different songs show up as separate discs.
+  - If a disc can't play, its name goes red and it gets skipped.
 
 **Two things the game can't do:**
 - **No real pause.** Pause stops the song. Play starts it again from the beginning.
 - **No volume control.** A disk drive plays as loud as a jukebox.
 
-**Song lengths:** the program knows every vanilla disc's length, so it moves on at the right moment. A modded disc is guessed at 3:00. Its real name and artist show up after it has played once. While it's playing, set its real length in **Settings** with **-10s / +10s**.
+**Song lengths:** the program knows every vanilla disc's length, so it moves on at the right moment. The game doesn't tell it how long a modded song is, so those start at a guess of 3:00, shown in yellow as **Length (guess)** on **Now playing**. While the song plays, fix it with the **-10 / -1 / +1 / +10** buttons there. It's remembered for that disc. If the next song starts too early or late, adjust it again.
 
 ## The Farm
 
